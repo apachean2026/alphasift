@@ -1,11 +1,11 @@
-name: AlphaSift 第二资金流数据源测试
+name: AlphaSift 第三步资金流口径验证
 
 on:
   workflow_dispatch:
 
 jobs:
 
-  test-ths-fund-flow:
+  verify-fund-flow:
 
     runs-on: ubuntu-latest
 
@@ -26,248 +26,383 @@ jobs:
           python-version: "3.11"
 
       # =========================================================
-      # 3. 安装 AKShare
+      # 3. 安装依赖
       # =========================================================
-      - name: Install AKShare
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install akshare pandas
 
       # =========================================================
-      # 4. 测试第二资金流数据源
-      #
-      # 数据源：
-      # AKShare
-      #   ↓
-      # 同花顺
-      #   ↓
-      # 个股资金流
-      #
-      # 接口：
-      # stock_fund_flow_individual(symbol="即时")
+      # 4. 测试同花顺资金流
       # =========================================================
-      - name: 测试第二资金流数据源 - 同花顺
+      - name: 验证同花顺资金流口径
         run: |
           python - <<'PY'
           import akshare as ak
           import pandas as pd
           import traceback
 
-          print("=" * 70)
-          print("开始测试第二资金流数据源")
-          print("数据链路：GitHub Actions → AKShare → 同花顺")
-          print("=" * 70)
+          print("=" * 80)
+          print("AlphaSift 第三步：验证同花顺资金流口径")
+          print("=" * 80)
 
           try:
 
+              # -------------------------------------------------
+              # 1. 获取全市场资金流
+              # -------------------------------------------------
+
               print("")
-              print("正在调用：")
-              print('ak.stock_fund_flow_individual(symbol="即时")')
+              print("【1】获取全市场资金流")
+              print("接口：stock_fund_flow_individual(symbol='即时')")
               print("")
 
               df = ak.stock_fund_flow_individual(symbol="即时")
 
-              print("=" * 70)
-              print("接口调用成功")
-              print("=" * 70)
+              if df is None or df.empty:
+                  raise RuntimeError("资金流数据为空")
 
-              if df is None:
-                  print("❌ 返回结果为 None")
-                  raise RuntimeError("接口返回 None")
-
-              if df.empty:
-                  print("❌ 返回 DataFrame 为空")
-                  raise RuntimeError("接口返回空数据")
-
-              print("")
-              print("数据行数：", len(df))
-              print("数据列：")
-              print(list(df.columns))
-
-              print("")
-              print("=" * 70)
-              print("前 5 行数据")
-              print("=" * 70)
-
-              print(df.head(5).to_string(index=False))
+              print("✅ 接口成功")
+              print("股票数量：", len(df))
+              print("字段：", list(df.columns))
 
               # -------------------------------------------------
-              # 查找平安银行
+              # 2. 找到正确的股票代码字段
               # -------------------------------------------------
-
-              print("")
-              print("=" * 70)
-              print("开始查找测试股票：000001 平安银行")
-              print("=" * 70)
 
               code_col = None
+              name_col = None
+              net_col = None
 
               for col in df.columns:
-                  col_text = str(col)
 
-                  if "股票代码" in col_text:
+                  text = str(col)
+
+                  if "股票代码" in text:
                       code_col = col
-                      break
+
+                  if "股票简称" in text:
+                      name_col = col
+
+                  if text == "净额":
+                      net_col = col
+
+              print("")
+              print("代码字段：", code_col)
+              print("名称字段：", name_col)
+              print("净额字段：", net_col)
 
               if code_col is None:
-                  print("⚠️ 没有找到“股票代码”字段")
-                  print("实际字段：", list(df.columns))
-              else:
+                  raise RuntimeError("没有找到股票代码字段")
 
-                  print("股票代码字段：", code_col)
-
-                  code_series = (
-                      df[code_col]
-                      .astype(str)
-                      .str.replace(".0", "", regex=False)
-                      .str.zfill(6)
-                  )
-
-                  target = df[code_series == "000001"]
-
-                  if target.empty:
-
-                      print("")
-                      print("⚠️ 没有找到 000001 平安银行")
-
-                      # 尝试名称查找
-                      name_col = None
-
-                      for col in df.columns:
-                          if "股票简称" in str(col):
-                              name_col = col
-                              break
-
-                      if name_col:
-                          target = df[
-                              df[name_col].astype(str).str.contains(
-                                  "平安银行",
-                                  na=False
-                              )
-                          ]
-
-                  if target.empty:
-
-                      print("❌ 最终没有找到平安银行")
-                      print("")
-                      print("这不代表资金流接口失败。")
-                      print("因为接口本身已经成功返回数据。")
-
-                  else:
-
-                      print("")
-                      print("=" * 70)
-                      print("找到平安银行")
-                      print("=" * 70)
-
-                      print(target.to_string(index=False))
-
-                      row = target.iloc[0]
-
-                      print("")
-                      print("=" * 70)
-                      print("资金流核心字段")
-                      print("=" * 70)
-
-                      for col in df.columns:
-
-                          name = str(col)
-
-                          if any(
-                              keyword in name
-                              for keyword in [
-                                  "流入资金",
-                                  "流出资金",
-                                  "净额",
-                                  "成交额"
-                              ]
-                          ):
-
-                              print(
-                                  f"{name} = {row.get(col)}"
-                              )
+              if net_col is None:
+                  raise RuntimeError("没有找到净额字段")
 
               # -------------------------------------------------
-              # 自动检查资金流字段
+              # 3. 标准化股票代码
+              # -------------------------------------------------
+
+              df["_code"] = (
+                  df[code_col]
+                  .astype(str)
+                  .str.strip()
+                  .str.replace(".0", "", regex=False)
+                  .str.zfill(6)
+              )
+
+              # -------------------------------------------------
+              # 4. 转换资金净额
+              #
+              # 例如：
+              # 3.05亿
+              # -5475.36万
+              # 7664.47万
+              # -------------------------------------------------
+
+              def parse_money(value):
+
+                  if pd.isna(value):
+                      return None
+
+                  text = str(value).strip()
+
+                  if text in ("", "-", "--", "nan", "None"):
+                      return None
+
+                  negative = text.startswith("-")
+
+                  text = text.replace(",", "")
+                  text = text.replace("+", "")
+                  text = text.replace("-", "")
+
+                  try:
+
+                      if "亿" in text:
+                          number = float(
+                              text.replace("亿", "")
+                          ) * 100000000
+
+                      elif "万" in text:
+                          number = float(
+                              text.replace("万", "")
+                          ) * 10000
+
+                      elif "千" in text:
+                          number = float(
+                              text.replace("千", "")
+                          ) * 1000
+
+                      else:
+                          number = float(text)
+
+                      return -number if negative else number
+
+                  except Exception:
+                      return None
+
+              df["_net_value"] = df[net_col].apply(parse_money)
+
+              # -------------------------------------------------
+              # 5. 测试平安银行
               # -------------------------------------------------
 
               print("")
-              print("=" * 70)
-              print("资金流字段检查")
-              print("=" * 70)
+              print("=" * 80)
+              print("【2】测试平安银行")
+              print("=" * 80)
 
-              flow_keywords = [
-                  "流入资金",
-                  "流出资金",
-                  "净额",
-                  "资金"
+              pingan = df[df["_code"] == "000001"]
+
+              if pingan.empty:
+                  print("⚠️ 没有找到 000001")
+              else:
+
+                  row = pingan.iloc[0]
+
+                  print("")
+                  print("股票：", row.get(name_col))
+                  print("代码：", row.get(code_col))
+                  print("最新价：", row.get("最新价"))
+                  print("涨跌幅：", row.get("涨跌幅"))
+                  print("换手率：", row.get("换手率"))
+                  print("流入资金：", row.get("流入资金"))
+                  print("流出资金：", row.get("流出资金"))
+                  print("净额：", row.get(net_col))
+                  print("成交额：", row.get("成交额"))
+                  print("净额数值：", row.get("_net_value"))
+
+                  if row.get("_net_value") is not None:
+
+                      if row["_net_value"] > 0:
+                          print("资金方向：🟢 净流入")
+
+                      elif row["_net_value"] < 0:
+                          print("资金方向：🔴 净流出")
+
+                      else:
+                          print("资金方向：⚪ 持平")
+
+              # -------------------------------------------------
+              # 6. 按净额排序
+              # -------------------------------------------------
+
+              print("")
+              print("=" * 80)
+              print("【3】资金净流入 Top 20")
+              print("=" * 80)
+
+              top_inflow = (
+                  df.dropna(subset=["_net_value"])
+                  .sort_values("_net_value", ascending=False)
+                  .head(20)
+              )
+
+              show_cols = [
+                  col
+                  for col in [
+                      code_col,
+                      name_col,
+                      "最新价",
+                      "涨跌幅",
+                      "换手率",
+                      "流入资金",
+                      "流出资金",
+                      net_col,
+                      "成交额"
+                  ]
+                  if col in top_inflow.columns
               ]
 
-              found_columns = []
+              print(
+                  top_inflow[show_cols].to_string(
+                      index=False
+                  )
+              )
 
-              for col in df.columns:
+              # -------------------------------------------------
+              # 7. 按净额排序 - 净流出 Top 20
+              # -------------------------------------------------
 
-                  col_text = str(col)
+              print("")
+              print("=" * 80)
+              print("【4】资金净流出 Top 20")
+              print("=" * 80)
 
-                  if any(
-                      keyword in col_text
-                      for keyword in flow_keywords
+              top_outflow = (
+                  df.dropna(subset=["_net_value"])
+                  .sort_values("_net_value", ascending=True)
+                  .head(20)
+              )
+
+              print(
+                  top_outflow[show_cols].to_string(
+                      index=False
+                  )
+              )
+
+              # -------------------------------------------------
+              # 8. 统计资金方向
+              # -------------------------------------------------
+
+              valid = df.dropna(
+                  subset=["_net_value"]
+              )
+
+              inflow_count = (
+                  valid["_net_value"] > 0
+              ).sum()
+
+              outflow_count = (
+                  valid["_net_value"] < 0
+              ).sum()
+
+              zero_count = (
+                  valid["_net_value"] == 0
+              ).sum()
+
+              print("")
+              print("=" * 80)
+              print("【5】全市场资金方向统计")
+              print("=" * 80)
+
+              print("有效股票：", len(valid))
+              print("净流入股票：", inflow_count)
+              print("净流出股票：", outflow_count)
+              print("持平股票：", zero_count)
+
+              # -------------------------------------------------
+              # 9. 检查公式
+              #
+              # 净额应该大致等于：
+              # 流入资金 - 流出资金
+              # -------------------------------------------------
+
+              print("")
+              print("=" * 80)
+              print("【6】验证净额计算逻辑")
+              print("=" * 80)
+
+              if not pingan.empty:
+
+                  row = pingan.iloc[0]
+
+                  def parse_flow(value):
+                      return parse_money(value)
+
+                  inflow = parse_flow(
+                      row.get("流入资金")
+                  )
+
+                  outflow = parse_flow(
+                      row.get("流出资金")
+                  )
+
+                  net = parse_flow(
+                      row.get(net_col)
+                  )
+
+                  print("流入资金 =", inflow)
+                  print("流出资金 =", outflow)
+                  print("接口净额 =", net)
+
+                  if (
+                      inflow is not None
+                      and outflow is not None
+                      and net is not None
                   ):
-                      found_columns.append(col)
 
-              if found_columns:
+                      calculated = inflow - outflow
 
-                  print("✅ 找到资金流字段：")
+                      print(
+                          "流入 - 流出 =",
+                          calculated
+                      )
 
-                  for col in found_columns:
-                      print("   -", col)
+                      print(
+                          "接口净额    =",
+                          net
+                      )
 
-              else:
+                      difference = abs(
+                          calculated - net
+                      )
 
-                  print("❌ 没有找到资金流字段")
-                  raise RuntimeError("没有发现资金流字段")
+                      print(
+                          "差值        =",
+                          difference
+                      )
+
+                      # 允许一定的四舍五入误差
+                      tolerance = max(
+                          100000,
+                          abs(net) * 0.02
+                      )
+
+                      if difference <= tolerance:
+                          print(
+                              "✅ 净额与流入-流出基本一致"
+                          )
+                      else:
+                          print(
+                              "⚠️ 净额与流入-流出存在明显差异"
+                          )
 
               # -------------------------------------------------
-              # 最终测试结果
+              # 10. 最终结论
               # -------------------------------------------------
 
               print("")
-              print("=" * 70)
-              print("第二资金流数据源测试结果")
-              print("=" * 70)
-
-              print("✅ AKShare 调用成功")
-              print("✅ 同花顺接口返回数据")
-              print("✅ 返回数据非空")
-              print("✅ 已检测资金流字段")
+              print("=" * 80)
+              print("【7】第三步测试结论")
+              print("=" * 80)
 
               print("")
-              print("结论：")
-              print("第二资金流数据源基本可用。")
+              print("✅ 同花顺资金流接口可访问")
+              print("✅ 可以获取全市场资金流")
+              print("✅ 可以获取流入资金")
+              print("✅ 可以获取流出资金")
+              print("✅ 可以获取净额")
+              print("✅ 可以进行净流入排序")
+              print("")
 
-              print("=" * 70)
+              print("⚠️ 当前仍然不要直接称“净额”为“主力净流入”。")
+              print("下一步需要确定资金口径以及是否适合用于 AlphaSift 硬筛。")
+
+              print("")
+              print("=" * 80)
 
           except Exception as e:
 
               print("")
-              print("=" * 70)
-              print("❌ 第二资金流数据源测试失败")
-              print("=" * 70)
+              print("=" * 80)
+              print("❌ 测试失败")
+              print("=" * 80)
 
               print("异常类型：", type(e).__name__)
               print("异常信息：", repr(e))
 
-              print("")
-              print("完整错误：")
-
               traceback.print_exc()
-
-              print("")
-              print("=" * 70)
-              print("结论")
-              print("=" * 70)
-
-              print("GitHub Actions 当前无法稳定访问该资金流数据源。")
 
               raise
           PY
