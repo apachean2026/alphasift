@@ -40,3 +40,24 @@ jobs:
       - name: 8. List strategies
         run: |
           alphasift strategies --explain
+
+      - name: 9. Build industry cache
+        run: |
+          mkdir -p data
+          alphasift industry-cache \
+            --output data/industry_map.csv \
+            --explain
+
+      - name: 10. Check industry cache
+        run: |
+          ls -lh data/industry_map.csv
+          python - <<'PY'
+          import pandas as pd
+
+          path = "data/industry_map.csv"
+          df = pd.read_csv(path)
+
+          print("industry_map.csv 行数:", len(df))
+          print("industry_map.csv 列:", list(df.columns))
+          print(df.head(10).to_string(index=False))
+          PY
