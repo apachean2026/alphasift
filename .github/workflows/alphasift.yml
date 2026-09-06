@@ -52,34 +52,239 @@ jobs:
           alphasift screen dual_low --no-llm --save-run
 
       # =========================================================
-      # 6. Send notification to Feishu
+      # 6. Read latest saved run
       # =========================================================
-      - name: 6. Send to Feishu
+      - name: 6. Read latest AlphaSift run
+        run: |
+          alphasift runs --json > latest_runs.json
+
+          echo "========== AlphaSift runs =========="
+          cat latest_runs.json
+
+      # =========================================================
+      # 7. Extract Top 5 and send to Feishu
+      # =========================================================
+      - name: 7. Send Top 5 to Feishu
         if: success()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
           python - <<'PY'
+          import json
           import os
           import requests
 
           webhook = os.environ.get("FEISHU_WEBHOOK_URL")
 
           if not webhook:
-              print("FEISHU_WEBHOOK_URL 未配置，跳过飞书通知")
+              print("FEISHU_WEBHOOK_URL 未配置")
+              print("跳过飞书通知")
               raise SystemExit(0)
 
+          # =====================================================
+          # 读取 AlphaSift 最近运行记录
+          # =====================================================
+          with open("latest_runs.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          # -----------------------------------------------------
+          # 兼容不同 AlphaSift runs --json 返回结构
+          # -----------------------------------------------------
+          if isinstance(data, list):
+              runs = data
+
+          elif isinstance(data, dict):
+              runs = (
+                  data.get("runs")
+                  or data.get("items")
+                  or data.get("results")
+                  or []
+              )
+
+          else:
+              runs = []
+
+          if not runs:
+              print("没有找到 AlphaSift saved run")
+              raise SystemExit(1)
+
+          # =====================================================
+          # 找最新的 dual_low run
+          # =====================================================
+          dual_low_runs = [
+              r for r in runs
+              if isinstance(r, dict)
+              and r.get("strategy") == "dual_low"
+          ]
+
+          if dual_low_runs:
+              runs = dual_low_runs
+
+          # 按 created_at / timestamp 排序
+          def run_time(item):
+              return (
+                  item.get("created_at")
+                  or item.get("timestamp")
+                  or item.get("run_id")
+                  or ""
+              )
+
+          latest_run = sorted(
+              runs,
+              key=run_time,
+              reverse=True
+          )[0]
+
+          run_id = latest_run.get("run_id", "unknown")
+
+          print("Latest run:", run_id)
+
+          # =====================================================
+          # 提取候选股票
+          # =====================================================
+          picks = (
+              latest_run.get("picks")
+              or latest_run.get("candidates")
+              or latest_run.get("results")
+              or []
+          )
+
+          if not isinstance(picks, list):
+              picks = []
+
+          # Top 5
+          picks = picks[:5]
+
+          if not picks:
+              print("最新 run 中没有找到股票候选")
+              print(json.dumps(
+                  latest_run,
+                  ensure_ascii=False,
+                  indent=2
+              ))
+              raise SystemExit(1)
+
+          # =====================================================
+          # 生成飞书消息
+          # =====================================================
+          lines = []
+
+          lines.append("📊 AlphaSift 每日选股")
+          lines.append("")
+          lines.append("策略：dual_low（双低选股）")
+          lines.append("运行状态：✅ 成功")
+          lines.append(f"Run ID：{run_id}")
+          lines.append("")
+          lines.append("🏆 今日 Top 5")
+          lines.append("")
+
+          for i, stock in enumerate(picks, 1):
+
+              code = (
+                  stock.get("code")
+                  or stock.get("symbol")
+                  or "-"
+              )
+
+              name = (
+                  stock.get("name")
+                  or "-"
+              )
+
+              final_score = (
+                  stock.get("final_score")
+                  or stock.get("score")
+                  or stock.get("screen_score")
+              )
+
+              screen_score = stock.get("screen_score")
+
+              price = stock.get("price")
+
+              change_pct = (
+                  stock.get("change_pct")
+                  or stock.get("change")
+              )
+
+              pe = (
+                  stock.get("pe_ratio")
+                  or stock.get("pe_ttm")
+                  or stock.get("pe")
+              )
+
+              pb = (
+                  stock.get("pb_ratio")
+                  or stock.get("pb")
+              )
+
+              risk = (
+                  stock.get("risk_level")
+                  or stock.get("risk")
+                  or "-"
+              )
+
+              def fmt(value, digits=2):
+                  if value is None:
+                      return "-"
+                  try:
+                      return f"{float(value):.{digits}f}"
+                  except Exception:
+                      return str(value)
+
+              lines.append(
+                  f"{i}️⃣ {name}（{code}）"
+              )
+
+              lines.append(
+                  f"   评分：{fmt(final_score, 1)}"
+              )
+
+              if screen_score is not None:
+                  lines.append(
+                      f"   筛选分：{fmt(screen_score, 1)}"
+                  )
+
+              lines.append(
+                  f"   价格：{fmt(price, 2)}"
+              )
+
+              if change_pct is not None:
+                  lines.append(
+                      f"   涨跌：{fmt(change_pct, 2)}%"
+                  )
+
+              lines.append(
+                  f"   PE：{fmt(pe, 2)}"
+              )
+
+              lines.append(
+                  f"   PB：{fmt(pb, 2)}"
+              )
+
+              lines.append(
+                  f"   风险：{risk}"
+              )
+
+              lines.append("")
+
+          lines.append("数据源：AlphaSift")
+          lines.append("LLM：未启用")
+          lines.append("后置分析：scorecard")
+          lines.append("")
+          lines.append("⚠️ 以上为程序筛选结果，不构成投资建议。")
+
+          message = "\n".join(lines)
+
+          print("========== Feishu Message ==========")
+          print(message)
+
+          # =====================================================
+          # 飞书 Webhook
+          # =====================================================
           payload = {
               "msg_type": "text",
               "content": {
-                  "text": (
-                      "📊 AlphaSift 每日选股完成\n\n"
-                      "策略：dual_low（双低选股）\n"
-                      "LLM：未启用\n"
-                      "后置分析：scorecard\n"
-                      "运行状态：成功\n\n"
-                      "GitHub Actions 已完成今日自动选股。"
-                  )
+                  "text": message
               }
           }
 
@@ -93,4 +298,18 @@ jobs:
           print("Feishu response:", response.text)
 
           response.raise_for_status()
+
+          # 飞书正常返回 code=0
+          try:
+              result = response.json()
+
+              if result.get("code", 0) != 0:
+                  raise RuntimeError(
+                      f"Feishu API error: {result}"
+                  )
+
+          except ValueError:
+              pass
+
+          print("✅ Top 5 已成功发送到飞书")
           PY
