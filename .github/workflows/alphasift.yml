@@ -1,4 +1,3 @@
-```yaml
 name: AlphaSift 每日选股
 
 on:
@@ -95,4 +94,3 @@ jobs:
 
           response.raise_for_status()
           PY
-```
