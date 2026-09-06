@@ -48,7 +48,12 @@ jobs:
           RUN_ID=$(grep -oE 'run_id=[a-zA-Z0-9]+' screen_output.txt | head -1 | cut -d= -f2)
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "本次 Run ID: $RUN_ID"
+          
+      - name: 10. Check installed CLI
+        run: |
+          python -c "import alphasift.cli; print(alphasift.cli.__file__)"
+          grep -n "failure-samples" alphasift/cli.py
 
-      - name: 10. Evaluate saved run
+      - name: 11. Evaluate saved run
         run: |
           alphasift evaluate "${{ steps.screening.outputs.run_id }}" --explain
