@@ -1,8 +1,12 @@
+```yaml
 name: AlphaSift 每日选股
 
 on:
   workflow_dispatch:
 
+  # 北京时间周一至周五 15:30
+  # GitHub Actions 使用 UTC
+  # 北京时间 = UTC + 8
   schedule:
     - cron: "30 7 * * 1-5"
 
@@ -13,22 +17,82 @@ jobs:
 
     steps:
 
+      # =========================================================
+      # 1. Checkout
+      # =========================================================
       - name: 1. Checkout
         uses: actions/checkout@v4
 
+      # =========================================================
+      # 2. Setup Python
+      # =========================================================
       - name: 2. Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # =========================================================
+      # 3. Install AlphaSift
+      # =========================================================
       - name: 3. Install AlphaSift
         run: |
           pip install -e .
 
+      # =========================================================
+      # 4. List strategies
+      # =========================================================
       - name: 4. List strategies
         run: |
           alphasift strategies
 
+      # =========================================================
+      # 5. Daily screening
+      # =========================================================
       - name: 5. Daily screening
         run: |
           alphasift screen dual_low --no-llm --save-run
+
+      # =========================================================
+      # 6. Send notification to Feishu
+      # =========================================================
+      - name: 6. Send to Feishu
+        if: success()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          webhook = os.environ.get("FEISHU_WEBHOOK_URL")
+
+          if not webhook:
+              print("FEISHU_WEBHOOK_URL 未配置，跳过飞书通知")
+              raise SystemExit(0)
+
+          payload = {
+              "msg_type": "text",
+              "content": {
+                  "text": (
+                      "📊 AlphaSift 每日选股完成\n\n"
+                      "策略：dual_low（双低选股）\n"
+                      "LLM：未启用\n"
+                      "后置分析：scorecard\n"
+                      "运行状态：成功\n\n"
+                      "GitHub Actions 已完成今日自动选股。"
+                  )
+              }
+          }
+
+          response = requests.post(
+              webhook,
+              json=payload,
+              timeout=20
+          )
+
+          print("Feishu HTTP status:", response.status_code)
+          print("Feishu response:", response.text)
+
+          response.raise_for_status()
+          PY
+```
