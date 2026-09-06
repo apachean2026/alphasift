@@ -1,11 +1,11 @@
-name: AlphaSift 第五步同花顺板块资金流测试
+name: AlphaSift 第六步板块资金流接口测试
 
 on:
   workflow_dispatch:
 
 jobs:
 
-  test-ths-sector-fund-flow:
+  test-sector-fund-flow:
 
     runs-on: ubuntu-latest
 
@@ -34,50 +34,165 @@ jobs:
           pip install --upgrade akshare pandas
 
       # =========================================================
-      # 4. 检查当前 AKShare 是否包含同花顺板块资金流接口
+      # 4. 检查实际存在的板块资金流接口
       # =========================================================
-      - name: 检查同花顺板块资金流接口
+      - name: 检查 AKShare 板块资金流接口
         run: |
           python - <<'PY'
           import akshare as ak
+          import inspect
 
           print("=" * 80)
-          print("检查 AKShare 同花顺板块资金流接口")
+          print("AlphaSift 第六步：检查 AKShare 板块资金流接口")
           print("=" * 80)
-
-          candidates = [
-              name
-              for name in dir(ak)
-              if "fund_flow" in name.lower()
-              and (
-                  "board" in name.lower()
-                  or "sector" in name.lower()
-              )
-          ]
-
-          if candidates:
-
-              print("")
-              print("发现以下相关接口：")
-
-              for name in sorted(candidates):
-                  print("  -", name)
-
-          else:
-
-              print("")
-              print("⚠️ 没有发现 board/sector + fund_flow 接口")
 
           print("")
-          print("AKShare 版本：", getattr(ak, "__version__", "unknown"))
+          print("AKShare 版本：")
+          print(getattr(ak, "__version__", "unknown"))
 
+          print("")
+          print("当前实际存在的 fund_flow 接口：")
+          print("")
+
+          names = [
+              x for x in dir(ak)
+              if "fund_flow" in x.lower()
+              and "sector" in x.lower()
+          ]
+
+          for name in sorted(names):
+
+              print(" -", name)
+
+              try:
+                  print(
+                      "   签名：",
+                      inspect.signature(
+                          getattr(ak, name)
+                      )
+                  )
+              except Exception:
+                  pass
+
+          print("")
           print("=" * 80)
           PY
 
       # =========================================================
-      # 5. 测试同花顺行业板块资金流
+      # 5. 测试 stock_sector_fund_flow_rank
       # =========================================================
-      - name: 测试同花顺行业板块资金流
+      - name: 测试板块资金流排名接口
+        run: |
+          python - <<'PY'
+          import akshare as ak
+          import pandas as pd
+          import traceback
+
+          print("=" * 80)
+          print("【1】测试 stock_sector_fund_flow_rank")
+          print("=" * 80)
+
+          try:
+
+              if not hasattr(
+                  ak,
+                  "stock_sector_fund_flow_rank"
+              ):
+
+                  raise RuntimeError(
+                      "当前 AKShare 不存在 "
+                      "stock_sector_fund_flow_rank"
+                  )
+
+              func = ak.stock_sector_fund_flow_rank
+
+              attempts = [
+                  {"indicator": "今日"},
+                  {"indicator": "5日"},
+                  {"indicator": "10日"},
+              ]
+
+              success = False
+
+              for kwargs in attempts:
+
+                  print("")
+                  print("尝试参数：", kwargs)
+
+                  try:
+
+                      df = func(**kwargs)
+
+                      if (
+                          df is not None
+                          and not df.empty
+                      ):
+
+                          print("")
+                          print("✅ 调用成功")
+                          print("参数：", kwargs)
+                          print("数据行数：", len(df))
+
+                          print("")
+                          print("字段：")
+                          print(list(df.columns))
+
+                          print("")
+                          print("前 10 行：")
+
+                          print(
+                              df.head(10)
+                              .to_string(index=False)
+                          )
+
+                          df.to_csv(
+                              "sector_fund_flow_rank.csv",
+                              index=False,
+                              encoding="utf-8-sig"
+                          )
+
+                          success = True
+                          break
+
+                      else:
+
+                          print(
+                              "⚠️ 返回空数据"
+                          )
+
+                  except Exception as e:
+
+                      print(
+                          "❌ 调用失败：",
+                          type(e).__name__,
+                          repr(e)
+                      )
+
+              if not success:
+
+                  print("")
+                  print(
+                      "❌ rank 接口所有测试均失败"
+                  )
+
+          except Exception as e:
+
+              print(
+                  "❌ rank 测试异常：",
+                  type(e).__name__,
+                  repr(e)
+              )
+
+              traceback.print_exc()
+
+          print("")
+          print("=" * 80)
+          PY
+
+      # =========================================================
+      # 6. 测试 stock_sector_fund_flow_summary
+      # =========================================================
+      - name: 测试板块资金流汇总接口
         run: |
           python - <<'PY'
           import akshare as ak
@@ -86,215 +201,282 @@ jobs:
           import inspect
 
           print("=" * 80)
-          print("AlphaSift 第五步：同花顺行业板块资金流")
+          print("【2】测试 stock_sector_fund_flow_summary")
           print("=" * 80)
-
-          # -----------------------------------------------------
-          # 寻找可能的同花顺行业板块资金流接口
-          # -----------------------------------------------------
-
-          candidates = [
-              "stock_board_industry_fund_flow_ths",
-              "stock_sector_fund_flow_ths",
-          ]
-
-          function_name = None
-
-          for name in candidates:
-
-              if hasattr(ak, name):
-
-                  function_name = name
-                  break
-
-          if function_name is None:
-
-              print("")
-              print("❌ 当前 AKShare 没有找到预期的同花顺行业资金流接口")
-
-              print("")
-              print("当前相关接口：")
-
-              for name in sorted(
-                  [
-                      x for x in dir(ak)
-                      if "fund_flow" in x.lower()
-                      and (
-                          "board" in x.lower()
-                          or "sector" in x.lower()
-                      )
-                  ]
-              ):
-                  print("  -", name)
-
-              raise RuntimeError(
-                  "没有找到同花顺行业板块资金流接口"
-              )
-
-          print("")
-          print("找到接口：", function_name)
-
-          func = getattr(ak, function_name)
 
           try:
 
-              print("")
-              print("函数签名：")
-              print(inspect.signature(func))
-
-          except Exception:
-
-              pass
-
-          # -----------------------------------------------------
-          # 获取同花顺行业板块列表
-          #
-          # 不同 AKShare 版本参数可能略有区别。
-          # 先尝试常见调用方式。
-          # -----------------------------------------------------
-
-          df = None
-          errors = []
-
-          attempts = [
-              {},
-              {"symbol": "半导体"},
-              {"symbol": "银行"},
-              {"symbol": "证券"},
-          ]
-
-          for kwargs in attempts:
-
-              try:
-
-                  print("")
-                  print("尝试调用：")
-                  print(
-                      function_name,
-                      kwargs
-                  )
-
-                  result = func(**kwargs)
-
-                  if (
-                      result is not None
-                      and not result.empty
-                  ):
-
-                      df = result
-
-                      print("")
-                      print("✅ 调用成功")
-                      print("参数：", kwargs)
-
-                      break
-
-                  else:
-
-                      errors.append(
-                          f"{kwargs} -> 空数据"
-                      )
-
-              except Exception as e:
-
-                  errors.append(
-                      f"{kwargs} -> "
-                      f"{type(e).__name__}: {e}"
-                  )
-
-          if df is None:
-
-              print("")
-              print("=" * 80)
-              print("❌ 同花顺行业板块资金流测试失败")
-              print("=" * 80)
-
-              print("")
-
-              for error in errors:
-                  print(error)
-
-              raise RuntimeError(
-                  "同花顺行业板块资金流无法获取数据"
-              )
-
-          # -----------------------------------------------------
-          # 输出数据
-          # -----------------------------------------------------
-
-          print("")
-          print("=" * 80)
-          print("【1】行业板块资金流接口成功")
-          print("=" * 80)
-
-          print("")
-          print("数据行数：", len(df))
-
-          print("")
-          print("字段：")
-          print(list(df.columns))
-
-          print("")
-          print("前 10 行：")
-          print(df.head(10).to_string(index=False))
-
-          # -----------------------------------------------------
-          # 自动寻找资金流字段
-          # -----------------------------------------------------
-
-          print("")
-          print("=" * 80)
-          print("【2】自动识别资金流字段")
-          print("=" * 80)
-
-          for col in df.columns:
-
-              text = str(col)
-
-              if any(
-                  keyword in text
-                  for keyword in [
-                      "流入",
-                      "流出",
-                      "净额",
-                      "净流入",
-                      "成交额"
-                  ]
+              if not hasattr(
+                  ak,
+                  "stock_sector_fund_flow_summary"
               ):
 
-                  print("资金字段：", col)
+                  raise RuntimeError(
+                      "当前 AKShare 不存在 "
+                      "stock_sector_fund_flow_summary"
+                  )
+
+              func = (
+                  ak.stock_sector_fund_flow_summary
+              )
+
+              print("")
+              print("函数签名：")
+
+              try:
+                  print(inspect.signature(func))
+              except Exception:
+                  pass
+
+              attempts = [
+                  {},
+                  {"symbol": "行业资金流"},
+                  {"symbol": "概念资金流"},
+              ]
+
+              success = False
+
+              for kwargs in attempts:
+
+                  print("")
+                  print("尝试参数：", kwargs)
+
+                  try:
+
+                      df = func(**kwargs)
+
+                      if (
+                          df is not None
+                          and not df.empty
+                      ):
+
+                          print("")
+                          print("✅ 调用成功")
+                          print("参数：", kwargs)
+                          print("数据行数：", len(df))
+
+                          print("")
+                          print("字段：")
+                          print(list(df.columns))
+
+                          print("")
+                          print("前 10 行：")
+
+                          print(
+                              df.head(10)
+                              .to_string(index=False)
+                          )
+
+                          df.to_csv(
+                              "sector_fund_flow_summary.csv",
+                              index=False,
+                              encoding="utf-8-sig"
+                          )
+
+                          success = True
+                          break
+
+                      else:
+
+                          print(
+                              "⚠️ 返回空数据"
+                          )
+
+                  except Exception as e:
+
+                      print(
+                          "❌ 调用失败：",
+                          type(e).__name__,
+                          repr(e)
+                      )
+
+              if not success:
+
+                  print("")
+                  print(
+                      "❌ summary 接口所有测试均失败"
+                  )
+
+          except Exception as e:
+
+              print(
+                  "❌ summary 测试异常：",
+                  type(e).__name__,
+                  repr(e)
+              )
+
+              traceback.print_exc()
 
           print("")
           print("=" * 80)
-          print("【3】行业板块资金流测试完成")
-          print("=" * 80)
-
-          print("")
-          print("下一步将根据实际返回字段判断：")
-          print("1. 是否有净流入")
-          print("2. 是否可以排序")
-          print("3. 是否可以关联股票所属行业")
-          print("4. 是否适合接入 AlphaSift")
-
-          print("")
-          print("=" * 80)
-
-          # 保存临时结果，方便 Actions 下载检查
-          df.to_csv(
-              "ths_industry_fund_flow_test.csv",
-              index=False,
-              encoding="utf-8-sig"
-          )
-
           PY
 
       # =========================================================
-      # 6. 上传测试结果
+      # 7. 测试 stock_sector_fund_flow_hist
       # =========================================================
-      - name: 保存行业资金流测试结果
+      - name: 测试板块历史资金流接口
+        run: |
+          python - <<'PY'
+          import akshare as ak
+          import pandas as pd
+          import traceback
+          import inspect
+
+          print("=" * 80)
+          print("【3】测试 stock_sector_fund_flow_hist")
+          print("=" * 80)
+
+          try:
+
+              if not hasattr(
+                  ak,
+                  "stock_sector_fund_flow_hist"
+              ):
+
+                  raise RuntimeError(
+                      "当前 AKShare 不存在 "
+                      "stock_sector_fund_flow_hist"
+                  )
+
+              func = ak.stock_sector_fund_flow_hist
+
+              print("")
+              print("函数签名：")
+
+              try:
+                  print(inspect.signature(func))
+              except Exception:
+                  pass
+
+              # -------------------------------------------------
+              # 根据函数签名自动生成测试参数
+              # -------------------------------------------------
+
+              signature = inspect.signature(func)
+
+              kwargs = {}
+
+              for name, parameter in signature.parameters.items():
+
+                  if name == "symbol":
+
+                      kwargs[name] = "半导体"
+
+                  elif name == "period":
+
+                      kwargs[name] = "今日"
+
+                  elif (
+                      parameter.default
+                      is inspect.Parameter.empty
+                  ):
+
+                      # 对必须参数做常见尝试
+                      if name in (
+                          "start_date",
+                          "start",
+                      ):
+
+                          kwargs[name] = "20260901"
+
+                      elif name in (
+                          "end_date",
+                          "end",
+                      ):
+
+                          kwargs[name] = "20260906"
+
+              print("")
+              print("自动生成测试参数：")
+              print(kwargs)
+
+              df = func(**kwargs)
+
+              if (
+                  df is None
+                  or df.empty
+              ):
+
+                  print("")
+                  print("⚠️ hist 返回空数据")
+
+              else:
+
+                  print("")
+                  print("✅ hist 调用成功")
+
+                  print("")
+                  print("数据行数：", len(df))
+
+                  print("")
+                  print("字段：")
+
+                  print(
+                      list(df.columns)
+                  )
+
+                  print("")
+                  print("前 20 行：")
+
+                  print(
+                      df.head(20)
+                      .to_string(index=False)
+                  )
+
+                  df.to_csv(
+                      "sector_fund_flow_hist.csv",
+                      index=False,
+                      encoding="utf-8-sig"
+                  )
+
+          except Exception as e:
+
+              print("")
+              print(
+                  "❌ hist 调用失败"
+              )
+
+              print(
+                  "异常类型：",
+                  type(e).__name__
+              )
+
+              print(
+                  "异常信息：",
+                  repr(e)
+              )
+
+              traceback.print_exc()
+
+          print("")
+          print("=" * 80)
+          PY
+
+      # =========================================================
+      # 8. 汇总测试结果
+      # =========================================================
+      - name: 汇总测试结果
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "第六步板块资金流测试文件"
+          echo "=============================================="
+
+          ls -lh *.csv 2>/dev/null || true
+
+          echo ""
+          echo "如果生成 CSV，说明对应接口至少返回了数据。"
+
+      # =========================================================
+      # 9. 上传测试结果
+      # =========================================================
+      - name: 上传板块资金流测试结果
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ths-industry-fund-flow-test
-          path: ths_industry_fund_flow_test.csv
+          name: sector-fund-flow-test
+          path: |
+            sector_fund_flow_rank.csv
+            sector_fund_flow_summary.csv
+            sector_fund_flow_hist.csv
           if-no-files-found: ignore
