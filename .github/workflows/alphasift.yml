@@ -29,6 +29,14 @@ jobs:
         run: |
           alphasift strategies
 
-      - name: 6. Run official quickstart
+      - name: 6. Check AlphaSift overview
         run: |
-          alphasift quickstart
+          alphasift overview --explain
+
+      - name: 7. Check data sources
+        run: |
+          alphasift doctor data-sources
+
+      - name: 8. List strategies
+        run: |
+          alphasift strategies --explain
