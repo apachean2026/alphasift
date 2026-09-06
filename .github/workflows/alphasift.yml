@@ -1,248 +1,148 @@
-name: 测试股票代码匹配
+name: 测试资金流金额解析
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-code-match:
-
+  fund-flow-parse:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - name: Install AKShare
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade akshare pandas
+          pip install akshare pandas
 
-      - name: Diagnose Stock Code
-        shell: bash
+      - name: 测试同花顺个股资金流金额解析
         run: |
           python - <<'PY'
-
           import akshare as ak
           import pandas as pd
+          import re
 
-          print("=" * 100)
-          print("股票代码匹配诊断")
-          print("=" * 100)
+          print("=" * 80)
+          print("同花顺个股资金流金额解析测试")
+          print("=" * 80)
 
-          # =====================================================
-          # 获取个股资金流
-          # =====================================================
+          # --------------------------------------------------
+          # 金额统一转换为“亿元”
+          # --------------------------------------------------
+          def parse_money(value):
+              if pd.isna(value):
+                  return None
 
-          print("")
-          print("【1】获取个股资金流")
+              s = str(value).strip().replace(",", "")
 
-          df = ak.stock_fund_flow_individual(
-              symbol="即时"
-          )
+              if not s:
+                  return None
 
-          print("数据行数：", len(df))
-          print("字段：", list(df.columns))
+              try:
+                  # 亿元
+                  if s.endswith("亿"):
+                      return float(s[:-1])
 
-          # =====================================================
-          # 查看真实股票代码
-          # =====================================================
+                  # 万元 -> 亿元
+                  if s.endswith("万"):
+                      return float(s[:-1]) / 10000
 
-          print("")
-          print("=" * 100)
-          print("【2】查看实际股票代码格式")
-          print("=" * 100)
+                  # 千元 -> 亿元
+                  if s.endswith("千"):
+                      return float(s[:-1]) / 100000
 
-          print("股票代码字段类型：")
-          print(df["股票代码"].dtype)
+                  # 纯数字
+                  return float(s)
 
-          print("")
-          print("前 30 个股票代码：")
+              except Exception:
+                  print(f"无法解析金额: {repr(value)}")
+                  return None
 
-          print(
-              df["股票代码"]
-              .head(30)
-              .tolist()
-          )
 
-          # =====================================================
-          # 指定股票
-          # =====================================================
+          print("\n[1] 获取同花顺个股资金流")
 
-          targets = [
+          df = ak.stock_fund_flow_individual(symbol="即时")
+
+          print(f"数据行数：{len(df)}")
+          print(f"字段：{list(df.columns)}")
+
+
+          # --------------------------------------------------
+          # 测试股票
+          # --------------------------------------------------
+          test_codes = [
               "600150",
               "300308",
               "600519",
               "300750",
           ]
 
-          print("")
-          print("=" * 100)
-          print("【3】直接搜索指定股票")
-          print("=" * 100)
+          print("\n" + "=" * 80)
+          print("[2] 测试资金字段原始值 + 解析结果")
+          print("=" * 80)
 
-          for code in targets:
 
-              print("")
-              print("-" * 100)
-              print("目标代码：", code)
+          for code in test_codes:
 
-              # 方法 1：原始字符串
-              mask1 = (
-                  df["股票代码"].astype(str)
-                  == code
-              )
+              print("\n" + "-" * 80)
+              print(f"股票代码：{code}")
 
-              print(
-                  "方法1 原始匹配：",
-                  int(mask1.sum()),
-                  "条"
-              )
+              stock_code = int(code)
 
-              if mask1.any():
-                  print(
-                      df.loc[mask1].to_string(
-                          index=False
-                      )
-                  )
+              rows = df[df["股票代码"] == stock_code]
+
+              if rows.empty:
+                  print("❌ 没有找到股票")
                   continue
 
-              # 方法 2：去空格
-              mask2 = (
-                  df["股票代码"]
-                  .astype(str)
-                  .str.strip()
-                  == code
-              )
+              row = rows.iloc[0]
 
-              print(
-                  "方法2 strip匹配：",
-                  int(mask2.sum()),
-                  "条"
-              )
+              print(f"股票简称：{row['股票简称']}")
 
-              if mask2.any():
-                  print(
-                      df.loc[mask2].to_string(
-                          index=False
-                      )
-                  )
-                  continue
+              print("\n原始资金字段：")
 
-              # 方法 3：补零
-              mask3 = (
-                  df["股票代码"]
-                  .astype(str)
-                  .str.strip()
-                  .str.zfill(6)
-                  == code
-              )
+              print("流入资金：", repr(row["流入资金"]))
+              print("流出资金：", repr(row["流出资金"]))
+              print("净额：    ", repr(row["净额"]))
+              print("成交额：  ", repr(row["成交额"]))
 
-              print(
-                  "方法3 zfill匹配：",
-                  int(mask3.sum()),
-                  "条"
-              )
+              inflow = parse_money(row["流入资金"])
+              outflow = parse_money(row["流出资金"])
+              net = parse_money(row["净额"])
+              turnover = parse_money(row["成交额"])
 
-              if mask3.any():
-                  print(
-                      df.loc[mask3].to_string(
-                          index=False
-                      )
-                  )
-                  continue
+              print("\n解析为亿元：")
 
-              # 方法 4：包含代码
-              mask4 = (
-                  df["股票代码"]
-                  .astype(str)
-                  .str.contains(
-                      code,
-                      regex=False,
-                      na=False
-                  )
-              )
+              print("流入资金：", inflow)
+              print("流出资金：", outflow)
+              print("净额：    ", net)
+              print("成交额：  ", turnover)
 
-              print(
-                  "方法4 contains匹配：",
-                  int(mask4.sum()),
-                  "条"
-              )
+              if net is not None and turnover not in (None, 0):
 
-              if mask4.any():
-                  print(
-                      df.loc[mask4].to_string(
-                          index=False
-                      )
-                  )
-                  continue
+                  strength = net / turnover * 100
 
-              print("❌ 四种方式都没有匹配")
+                  print("\n资金流强度：")
+                  print(f"{strength:.2f}%")
 
-          # =====================================================
-          # 查看股票代码长度
-          # =====================================================
+                  if strength > 0:
+                      print("资金方向：净流入")
+                  elif strength < 0:
+                      print("资金方向：净流出")
+                  else:
+                      print("资金方向：持平")
 
-          print("")
-          print("=" * 100)
-          print("【4】股票代码长度统计")
-          print("=" * 100)
+              print("-" * 80)
 
-          code_lengths = (
-              df["股票代码"]
-              .astype(str)
-              .str.len()
-              .value_counts()
-              .sort_index()
-          )
 
-          print(code_lengths)
-
-          # =====================================================
-          # 查看可能包含 600150 / 300308 等的记录
-          # =====================================================
-
-          print("")
-          print("=" * 100)
-          print("【5】模糊搜索")
-          print("=" * 100)
-
-          for code in targets:
-
-              result = df[
-                  df["股票代码"]
-                  .astype(str)
-                  .str.contains(
-                      code,
-                      regex=False,
-                      na=False
-                  )
-              ]
-
-              print("")
-              print(
-                  "搜索",
-                  code,
-                  "找到",
-                  len(result),
-                  "条"
-              )
-
-              if not result.empty:
-                  print(
-                      result.to_string(
-                          index=False
-                      )
-                  )
-
-          print("")
-          print("=" * 100)
-          print("诊断完成")
-          print("=" * 100)
+          print("\n" + "=" * 80)
+          print("测试完成")
+          print("=" * 80)
 
           PY
