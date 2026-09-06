@@ -1,16 +1,12 @@
-name: AlphaSift 每日选股
+name: AlphaSift 第二资金流数据源测试
 
 on:
   workflow_dispatch:
 
-  # 北京时间周一至周五 15:30
-  # GitHub Actions 使用 UTC
-  # 北京时间 = UTC + 8
-  schedule:
-    - cron: "30 7 * * 1-5"
-
 jobs:
-  alphasift:
+
+  test-ths-fund-flow:
+
     runs-on: ubuntu-latest
 
     steps:
@@ -18,1361 +14,260 @@ jobs:
       # =========================================================
       # 1. Checkout
       # =========================================================
-      - name: 1. Checkout
+      - name: Checkout
         uses: actions/checkout@v4
 
       # =========================================================
       # 2. Setup Python
       # =========================================================
-      - name: 2. Setup Python
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       # =========================================================
-      # 3. Install AlphaSift
+      # 3. 安装 AKShare
       # =========================================================
-      - name: 3. Install AlphaSift
+      - name: Install AKShare
         run: |
           python -m pip install --upgrade pip
-          pip install -e .
+          pip install akshare pandas
 
       # =========================================================
-      # 3.5 临时测试
+      # 4. 测试第二资金流数据源
       #
-      # GitHub Actions
-      #       ↓
+      # 数据源：
       # AKShare
-      #       ↓
-      # 东方财富
-      #       ↓
+      #   ↓
+      # 同花顺
+      #   ↓
       # 个股资金流
-      #       ↓
-      # 主力净流入
       #
-      # 测试股票：
-      # 000001 平安银行
-      #
-      # 注意：
-      # 这个步骤只是测试，不修改 AlphaSift 作者源码。
+      # 接口：
+      # stock_fund_flow_individual(symbol="即时")
       # =========================================================
-      - name: 3.5 TEST - 东方财富个股主力净流入
+      - name: 测试第二资金流数据源 - 同花顺
         run: |
-
-          echo "========================================================"
-          echo "开始测试：AKShare → 东方财富 → 个股主力净流入"
-          echo "========================================================"
-
           python - <<'PY'
-
           import akshare as ak
-          import sys
+          import pandas as pd
+          import traceback
 
-          print("")
-          print("========================================================")
-          print("东方财富个股资金流接口测试")
-          print("========================================================")
-
-          # -----------------------------------------------------
-          # 测试股票
-          # -----------------------------------------------------
-
-          stock = "000001"
-          market = "sz"
-
-          print("")
-          print("测试股票：000001 平安银行")
-          print("股票代码：", stock)
-          print("市场参数：", market)
-
-          print("")
-          print("开始调用：")
-          print("ak.stock_individual_fund_flow(...)")
-          print("")
+          print("=" * 70)
+          print("开始测试第二资金流数据源")
+          print("数据链路：GitHub Actions → AKShare → 同花顺")
+          print("=" * 70)
 
           try:
 
-              df = ak.stock_individual_fund_flow(
-                  stock=stock,
-                  market=market
-              )
+              print("")
+              print("正在调用：")
+              print('ak.stock_fund_flow_individual(symbol="即时")')
+              print("")
 
-          except Exception as exc:
+              df = ak.stock_fund_flow_individual(symbol="即时")
+
+              print("=" * 70)
+              print("接口调用成功")
+              print("=" * 70)
+
+              if df is None:
+                  print("❌ 返回结果为 None")
+                  raise RuntimeError("接口返回 None")
+
+              if df.empty:
+                  print("❌ 返回 DataFrame 为空")
+                  raise RuntimeError("接口返回空数据")
 
               print("")
-              print("========================================================")
-              print("❌ 接口调用失败")
-              print("========================================================")
+              print("数据行数：", len(df))
+              print("数据列：")
+              print(list(df.columns))
 
-              print("异常类型：", type(exc).__name__)
-              print("异常信息：", str(exc))
+              print("")
+              print("=" * 70)
+              print("前 5 行数据")
+              print("=" * 70)
+
+              print(df.head(5).to_string(index=False))
+
+              # -------------------------------------------------
+              # 查找平安银行
+              # -------------------------------------------------
+
+              print("")
+              print("=" * 70)
+              print("开始查找测试股票：000001 平安银行")
+              print("=" * 70)
+
+              code_col = None
+
+              for col in df.columns:
+                  col_text = str(col)
+
+                  if "股票代码" in col_text:
+                      code_col = col
+                      break
+
+              if code_col is None:
+                  print("⚠️ 没有找到“股票代码”字段")
+                  print("实际字段：", list(df.columns))
+              else:
+
+                  print("股票代码字段：", code_col)
+
+                  code_series = (
+                      df[code_col]
+                      .astype(str)
+                      .str.replace(".0", "", regex=False)
+                      .str.zfill(6)
+                  )
+
+                  target = df[code_series == "000001"]
+
+                  if target.empty:
+
+                      print("")
+                      print("⚠️ 没有找到 000001 平安银行")
+
+                      # 尝试名称查找
+                      name_col = None
+
+                      for col in df.columns:
+                          if "股票简称" in str(col):
+                              name_col = col
+                              break
+
+                      if name_col:
+                          target = df[
+                              df[name_col].astype(str).str.contains(
+                                  "平安银行",
+                                  na=False
+                              )
+                          ]
+
+                  if target.empty:
+
+                      print("❌ 最终没有找到平安银行")
+                      print("")
+                      print("这不代表资金流接口失败。")
+                      print("因为接口本身已经成功返回数据。")
+
+                  else:
+
+                      print("")
+                      print("=" * 70)
+                      print("找到平安银行")
+                      print("=" * 70)
+
+                      print(target.to_string(index=False))
+
+                      row = target.iloc[0]
+
+                      print("")
+                      print("=" * 70)
+                      print("资金流核心字段")
+                      print("=" * 70)
+
+                      for col in df.columns:
+
+                          name = str(col)
+
+                          if any(
+                              keyword in name
+                              for keyword in [
+                                  "流入资金",
+                                  "流出资金",
+                                  "净额",
+                                  "成交额"
+                              ]
+                          ):
+
+                              print(
+                                  f"{name} = {row.get(col)}"
+                              )
+
+              # -------------------------------------------------
+              # 自动检查资金流字段
+              # -------------------------------------------------
+
+              print("")
+              print("=" * 70)
+              print("资金流字段检查")
+              print("=" * 70)
+
+              flow_keywords = [
+                  "流入资金",
+                  "流出资金",
+                  "净额",
+                  "资金"
+              ]
+
+              found_columns = []
+
+              for col in df.columns:
+
+                  col_text = str(col)
+
+                  if any(
+                      keyword in col_text
+                      for keyword in flow_keywords
+                  ):
+                      found_columns.append(col)
+
+              if found_columns:
+
+                  print("✅ 找到资金流字段：")
+
+                  for col in found_columns:
+                      print("   -", col)
+
+              else:
+
+                  print("❌ 没有找到资金流字段")
+                  raise RuntimeError("没有发现资金流字段")
+
+              # -------------------------------------------------
+              # 最终测试结果
+              # -------------------------------------------------
+
+              print("")
+              print("=" * 70)
+              print("第二资金流数据源测试结果")
+              print("=" * 70)
+
+              print("✅ AKShare 调用成功")
+              print("✅ 同花顺接口返回数据")
+              print("✅ 返回数据非空")
+              print("✅ 已检测资金流字段")
 
               print("")
               print("结论：")
-              print("GitHub Actions 当前无法正常获取东方财富个股资金流数据。")
+              print("第二资金流数据源基本可用。")
+
+              print("=" * 70)
+
+          except Exception as e:
+
+              print("")
+              print("=" * 70)
+              print("❌ 第二资金流数据源测试失败")
+              print("=" * 70)
+
+              print("异常类型：", type(e).__name__)
+              print("异常信息：", repr(e))
+
+              print("")
+              print("完整错误：")
+
+              traceback.print_exc()
+
+              print("")
+              print("=" * 70)
+              print("结论")
+              print("=" * 70)
+
+              print("GitHub Actions 当前无法稳定访问该资金流数据源。")
 
               raise
-
-          # -----------------------------------------------------
-          # 判断是否为空
-          # -----------------------------------------------------
-
-          if df is None:
-
-              print("")
-              print("❌ 接口返回 None")
-              sys.exit(1)
-
-          if df.empty:
-
-              print("")
-              print("❌ 接口返回空数据")
-              print("东方财富资金流数据没有返回任何记录。")
-
-              sys.exit(1)
-
-          # -----------------------------------------------------
-          # 基础信息
-          # -----------------------------------------------------
-
-          print("")
-          print("========================================================")
-          print("✅ 接口调用成功")
-          print("========================================================")
-
-          print("")
-          print("数据行数：", len(df))
-
-          print("")
-          print("数据字段：")
-
-          for column in df.columns:
-              print(" -", column)
-
-          # -----------------------------------------------------
-          # 显示最新数据
-          # -----------------------------------------------------
-
-          print("")
-          print("========================================================")
-          print("最新一条资金流数据")
-          print("========================================================")
-
-          latest = df.iloc[-1]
-
-          print(
-              latest.to_string()
-          )
-
-          # -----------------------------------------------------
-          # 检查关键字段
-          # -----------------------------------------------------
-
-          print("")
-          print("========================================================")
-          print("检查主力资金字段")
-          print("========================================================")
-
-          required_fields = [
-              "主力净流入-净额",
-              "主力净流入-净占比",
-          ]
-
-          missing_fields = []
-
-          for field in required_fields:
-
-              if field not in df.columns:
-
-                  missing_fields.append(field)
-
-          if missing_fields:
-
-              print("")
-              print("❌ 缺少关键字段：")
-
-              for field in missing_fields:
-                  print(" -", field)
-
-              print("")
-              print("实际字段：")
-              print(list(df.columns))
-
-              sys.exit(1)
-
-          # -----------------------------------------------------
-          # 提取主力净流入
-          # -----------------------------------------------------
-
-          date_value = latest.get(
-              "日期",
-              ""
-          )
-
-          main_net_inflow = latest.get(
-              "主力净流入-净额",
-              ""
-          )
-
-          main_net_ratio = latest.get(
-              "主力净流入-净占比",
-              ""
-          )
-
-          # -----------------------------------------------------
-          # 同时检查其他资金流字段
-          # -----------------------------------------------------
-
-          extra_fields = [
-              "超大单净流入-净额",
-              "超大单净流入-净占比",
-              "大单净流入-净额",
-              "大单净流入-净占比",
-              "中单净流入-净额",
-              "中单净流入-净占比",
-              "小单净流入-净额",
-              "小单净流入-净占比",
-          ]
-
-          # -----------------------------------------------------
-          # 最终结果
-          # -----------------------------------------------------
-
-          print("")
-          print("========================================================")
-          print("🎉 东方财富主力资金测试成功")
-          print("========================================================")
-
-          print("")
-          print("股票：000001 平安银行")
-          print("日期：", date_value)
-
-          print(
-              "主力净流入-净额：",
-              main_net_inflow
-          )
-
-          print(
-              "主力净流入-净占比：",
-              main_net_ratio
-          )
-
-          print("")
-          print("其他可用资金字段：")
-
-          for field in extra_fields:
-
-              if field in df.columns:
-
-                  print(
-                      f"{field}：",
-                      latest.get(field, "")
-                  )
-
-          print("")
-          print("========================================================")
-          print("测试结论")
-          print("========================================================")
-
-          print("")
-          print("✅ GitHub Actions 可以访问 AKShare")
-          print("✅ AKShare 成功调用个股资金流接口")
-          print("✅ 东方财富资金流数据成功返回")
-          print("✅ 成功获取主力净流入-净额")
-          print("✅ 成功获取主力净流入-净占比")
-
-          print("")
-          print("下一步可以考虑将该数据加入 AlphaSift 最终选股流程。")
-
-          print("")
-          print("========================================================")
-
-          PY
-
-      # =========================================================
-      # 4. List strategies
-      # =========================================================
-      - name: 4. List strategies
-        run: |
-          echo "========================================"
-          echo "AlphaSift 作者原版策略"
-          echo "========================================"
-
-          alphasift strategies
-
-      # =========================================================
-      # 5. Generate industry map
-      # =========================================================
-      - name: 5. Generate industry map
-        run: |
-          mkdir -p data
-
-          python - <<'PY'
-          import baostock as bs
-          import pandas as pd
-
-          print("========================================")
-          print("开始获取 A 股行业分类")
-          print("========================================")
-
-          login = bs.login()
-
-          print(
-              "Baostock login:",
-              login.error_code,
-              login.error_msg
-          )
-
-          if login.error_code != "0":
-              raise SystemExit(
-                  "Baostock 登录失败：" + str(login.error_msg)
-              )
-
-          try:
-              rs = bs.query_stock_industry()
-
-              print(
-                  "query_stock_industry:",
-                  rs.error_code,
-                  rs.error_msg
-              )
-
-              if rs.error_code != "0":
-                  raise SystemExit(
-                      "获取行业数据失败：" + str(rs.error_msg)
-                  )
-
-              rows = []
-
-              while rs.next():
-                  rows.append(rs.get_row_data())
-
-              if not rows:
-                  raise SystemExit(
-                      "错误：Baostock 没有返回任何行业数据"
-                  )
-
-              df = pd.DataFrame(
-                  rows,
-                  columns=rs.fields
-              )
-
-              print("")
-              print(
-                  "Baostock 原始行业数据：",
-                  len(df),
-                  "行"
-              )
-
-              print(
-                  "原始字段：",
-                  list(df.columns)
-              )
-
-              if "code" not in df.columns:
-                  raise SystemExit(
-                      "错误：行业数据中不存在 code 字段"
-                  )
-
-              if "industry" not in df.columns:
-                  raise SystemExit(
-                      "错误：行业数据中不存在 industry 字段"
-                  )
-
-              # =================================================
-              # 创建 AlphaSift 行业映射
-              # =================================================
-
-              output = pd.DataFrame()
-
-              output["code"] = (
-                  df["code"]
-                  .astype(str)
-                  .str.replace("sh.", "", regex=False)
-                  .str.replace("sz.", "", regex=False)
-                  .str.replace("bj.", "", regex=False)
-                  .str.strip()
-              )
-
-              output["industry"] = (
-                  df["industry"]
-                  .fillna("")
-                  .astype(str)
-                  .str.strip()
-              )
-
-              # Baostock 当前主要提供行业分类。
-              # concepts 暂时留空。
-              output["concepts"] = ""
-
-              # =================================================
-              # 只保留标准 6 位股票代码
-              # =================================================
-
-              output = output[
-                  output["code"].str.match(r"^\d{6}$")
-              ]
-
-              # =================================================
-              # 删除重复股票
-              # =================================================
-
-              output = output.drop_duplicates(
-                  subset=["code"],
-                  keep="first"
-              )
-
-              # =================================================
-              # 删除没有行业的数据
-              # =================================================
-
-              output = output[
-                  output["industry"].str.len() > 0
-              ]
-
-              if output.empty:
-                  raise SystemExit(
-                      "错误：生成的行业映射为空"
-                  )
-
-              # =================================================
-              # 保存
-              # =================================================
-
-              output.to_csv(
-                  "data/industry_map.csv",
-                  index=False,
-                  encoding="utf-8-sig"
-              )
-
-              print("")
-              print("========================================")
-              print("行业映射生成完成")
-              print("========================================")
-
-              print(
-                  "股票数量：",
-                  len(output)
-              )
-
-              print(
-                  "文件：data/industry_map.csv"
-              )
-
-              print("")
-              print("前 10 条数据：")
-
-              print(
-                  output.head(10).to_string(index=False)
-              )
-
-              print("")
-              print("主要行业统计：")
-
-              industry_counts = (
-                  output["industry"]
-                  .value_counts()
-                  .head(20)
-              )
-
-              print(
-                  industry_counts.to_string()
-              )
-
-          finally:
-              bs.logout()
-
-              print("")
-              print("Baostock 已退出")
-
-          PY
-
-          echo ""
-          echo "========================================"
-          echo "检查行业映射文件"
-          echo "========================================"
-
-          ls -lh data/industry_map.csv
-
-          echo ""
-          echo "行业映射文件前 20 行："
-
-          head -20 data/industry_map.csv
-
-      # =========================================================
-      # 6. Daily screening - 6 official strategies
-      #
-      # 删除：
-      #   dual_low 双低选股
-      #
-      # 保留：
-      #   balanced_alpha     均衡多因子
-      #   momentum_quality   趋势质量
-      #   volume_breakout    放量突破
-      #   shrink_pullback    缩量回踩
-      #   oversold_reversal  超跌反转
-      #   capital_heat       资金热度
-      # =========================================================
-      - name: 6. Daily screening - 6 strategies
-        env:
-          INDUSTRY_MAP_FILES: ./data/industry_map.csv
-          INDUSTRY_PROVIDER: none
-        run: |
-
-          echo "========================================"
-          echo "AlphaSift 六策略每日选股开始"
-          echo "========================================"
-
-          echo ""
-          echo "价格范围：2 元 - 30 元"
-          echo "说明：价格范围将在最终飞书结果阶段执行"
-
-          echo ""
-          echo "行业映射："
-          echo "$INDUSTRY_MAP_FILES"
-
-          echo ""
-          echo "行业 Provider："
-          echo "$INDUSTRY_PROVIDER"
-
-          # =====================================================
-          # Strategy 1 - balanced_alpha
-          # =====================================================
-
-          echo ""
-          echo "========================================"
-          echo "1/6 balanced_alpha"
-          echo "均衡多因子"
-          echo "========================================"
-
-          alphasift screen balanced_alpha --no-llm --save-run
-
-          # =====================================================
-          # Strategy 2 - momentum_quality
-          # =====================================================
-
-          echo ""
-          echo "========================================"
-          echo "2/6 momentum_quality"
-          echo "趋势质量"
-          echo "========================================"
-
-          alphasift screen momentum_quality --no-llm --save-run
-
-          # =====================================================
-          # Strategy 3 - volume_breakout
-          # =====================================================
-
-          echo ""
-          echo "========================================"
-          echo "3/6 volume_breakout"
-          echo "放量突破"
-          echo "========================================"
-
-          alphasift screen volume_breakout --no-llm --save-run
-
-          # =====================================================
-          # Strategy 4 - shrink_pullback
-          # =====================================================
-
-          echo ""
-          echo "========================================"
-          echo "4/6 shrink_pullback"
-          echo "缩量回踩"
-          echo "========================================"
-
-          alphasift screen shrink_pullback --no-llm --save-run
-
-          # =====================================================
-          # Strategy 5 - oversold_reversal
-          # =====================================================
-
-          echo ""
-          echo "========================================"
-          echo "5/6 oversold_reversal"
-          echo "超跌反转"
-          echo "========================================"
-
-          alphasift screen oversold_reversal --no-llm --save-run
-
-          # =====================================================
-          # Strategy 6 - capital_heat
-          # =====================================================
-
-          echo ""
-          echo "========================================"
-          echo "6/6 capital_heat"
-          echo "资金热度"
-          echo "========================================"
-
-          alphasift screen capital_heat --no-llm --save-run
-
-          echo ""
-          echo "========================================"
-          echo "六策略全部执行完成"
-          echo "========================================"
-
-      # =========================================================
-      # 7. Collect the six runs generated by this workflow
-      #
-      # 目前仍按照最新 6 个 run 收集。
-      # 后续正式版本可以进一步改成：
-      # 只收集本次 workflow 新产生的 6 个 run。
-      # =========================================================
-      - name: 7. Collect latest 6 runs
-        if: success()
-        run: |
-
-          python - <<'PY'
-          from pathlib import Path
-          import json
-
-          run_dir = Path("data/runs")
-
-          if not run_dir.exists():
-              raise SystemExit(
-                  "错误：data/runs 目录不存在"
-              )
-
-          files = list(run_dir.glob("*.json"))
-
-          if not files:
-              raise SystemExit(
-                  "错误：没有找到 AlphaSift run JSON"
-              )
-
-          # -----------------------------------------------------
-          # 按文件修改时间倒序排列
-          # -----------------------------------------------------
-
-          files = sorted(
-              files,
-              key=lambda p: p.stat().st_mtime,
-              reverse=True
-          )
-
-          latest_files = files[:6]
-
-          print("========================================")
-          print("本次最新 6 个 AlphaSift runs")
-          print("========================================")
-
-          run_info = []
-
-          for path in latest_files:
-
-              try:
-
-                  with path.open(
-                      "r",
-                      encoding="utf-8"
-                  ) as f:
-
-                      data = json.load(f)
-
-                  info = {
-                      "file": str(path),
-                      "run_id": data.get(
-                          "run_id",
-                          "unknown"
-                      ),
-                      "strategy": data.get(
-                          "strategy",
-                          "unknown"
-                      ),
-                      "snapshot_source": data.get(
-                          "snapshot_source",
-                          "unknown"
-                      )
-                  }
-
-                  run_info.append(info)
-
-                  print("")
-                  print("文件：", path)
-                  print("Run ID：", info["run_id"])
-                  print("Strategy：", info["strategy"])
-                  print(
-                      "Snapshot source：",
-                      info["snapshot_source"]
-                  )
-
-              except Exception as exc:
-
-                  print(
-                      "读取失败：",
-                      path,
-                      exc
-                  )
-
-          if not run_info:
-              raise SystemExit(
-                  "错误：无法读取任何 run"
-              )
-
-          # -----------------------------------------------------
-          # 保存本次最新 runs
-          # -----------------------------------------------------
-
-          with open(
-              "data/latest_runs.json",
-              "w",
-              encoding="utf-8"
-          ) as f:
-
-              json.dump(
-                  run_info,
-                  f,
-                  ensure_ascii=False,
-                  indent=2
-              )
-
-          print("")
-          print(
-              "已生成：data/latest_runs.json"
-          )
-
-          PY
-
-      # =========================================================
-      # 8. Send six strategy results to Feishu
-      # =========================================================
-      - name: 8. Send 6 strategy results to Feishu
-        if: success()
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-        run: |
-
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-          import requests
-
-          webhook = os.environ.get(
-              "FEISHU_WEBHOOK_URL"
-          )
-
-          if not webhook:
-              print(
-                  "没有配置 FEISHU_WEBHOOK_URL，"
-                  "跳过飞书通知"
-              )
-              raise SystemExit(0)
-
-          latest_runs_file = Path(
-              "data/latest_runs.json"
-          )
-
-          if not latest_runs_file.exists():
-              raise SystemExit(
-                  "错误：data/latest_runs.json 不存在"
-              )
-
-          with latest_runs_file.open(
-              "r",
-              encoding="utf-8"
-          ) as f:
-              run_infos = json.load(f)
-
-          # =====================================================
-          # 策略中文名称
-          # =====================================================
-
-          strategy_names = {
-
-              "balanced_alpha":
-                  "均衡多因子",
-
-              "momentum_quality":
-                  "趋势质量",
-
-              "volume_breakout":
-                  "放量突破",
-
-              "shrink_pullback":
-                  "缩量回踩",
-
-              "oversold_reversal":
-                  "超跌反转",
-
-              "capital_heat":
-                  "资金热度",
-
-          }
-
-          # =====================================================
-          # 工具函数
-          # =====================================================
-
-          def number(value, digits=2):
-
-              if value is None:
-                  return "-"
-
-              try:
-                  return f"{float(value):.{digits}f}"
-
-              except Exception:
-                  return str(value)
-
-          def find_candidates(data):
-
-              possible_fields = [
-
-                  "picks",
-                  "candidates",
-                  "results",
-                  "ranked_candidates",
-                  "selected_stocks",
-                  "stocks",
-                  "items",
-                  "top_picks",
-                  "ranked"
-
-              ]
-
-              # -------------------------------------------------
-              # 顶层寻找
-              # -------------------------------------------------
-
-              for field in possible_fields:
-
-                  value = data.get(field)
-
-                  if (
-                      isinstance(value, list)
-                      and value
-                  ):
-
-                      return value
-
-              # -------------------------------------------------
-              # 嵌套寻找
-              # -------------------------------------------------
-
-              for parent_name in [
-
-                  "result",
-                  "screen_result",
-                  "screen",
-                  "selection",
-                  "portfolio",
-                  "data"
-
-              ]:
-
-                  parent = data.get(
-                      parent_name
-                  )
-
-                  if not isinstance(
-                      parent,
-                      dict
-                  ):
-
-                      continue
-
-                  for field in possible_fields:
-
-                      value = parent.get(
-                          field
-                      )
-
-                      if (
-                          isinstance(value, list)
-                          and value
-                      ):
-
-                          return value
-
-              return None
-
-          def get_rank(stock):
-
-              if not isinstance(
-                  stock,
-                  dict
-              ):
-
-                  return 999999
-
-              value = stock.get("rank")
-
-              if value is None:
-                  value = stock.get("ranking")
-
-              if value is None:
-                  value = stock.get("position")
-
-              try:
-                  return int(value)
-
-              except Exception:
-                  return 999999
-
-          def get_price(stock):
-
-              if not isinstance(
-                  stock,
-                  dict
-              ):
-
-                  return None
-
-              value = stock.get("price")
-
-              if value is None:
-                  value = stock.get("close")
-
-              try:
-                  return float(value)
-
-              except Exception:
-                  return None
-
-          # =====================================================
-          # 创建飞书消息
-          # =====================================================
-
-          lines = []
-
-          lines.append(
-              "📊 AlphaSift 每日六策略选股"
-          )
-
-          lines.append("")
-
-          lines.append(
-              "运行时间：北京时间工作日 15:30"
-          )
-
-          lines.append(
-              "股票价格范围：2～30 元"
-          )
-
-          lines.append(
-              "LLM：未启用"
-          )
-
-          lines.append(
-              "数据源：作者原版自动数据源"
-          )
-
-          lines.append("")
-
-          lines.append(
-              "━━━━━━━━━━━━━━━━"
-          )
-
-          strategy_count = 0
-
-          # =====================================================
-          # 逐个读取六个策略
-          # =====================================================
-
-          for info in reversed(run_infos):
-
-              run_file = Path(
-                  info["file"]
-              )
-
-              if not run_file.exists():
-                  continue
-
-              try:
-
-                  with run_file.open(
-                      "r",
-                      encoding="utf-8"
-                  ) as f:
-
-                      data = json.load(f)
-
-              except Exception as exc:
-
-                  print(
-                      "读取 run 失败：",
-                      run_file,
-                      exc
-                  )
-
-                  continue
-
-              strategy = data.get(
-                  "strategy",
-                  info.get(
-                      "strategy",
-                      "unknown"
-                  )
-              )
-
-              strategy_display = strategy_names.get(
-                  strategy,
-                  strategy
-              )
-
-              run_id = data.get(
-                  "run_id",
-                  info.get(
-                      "run_id",
-                      "unknown"
-                  )
-              )
-
-              source = data.get(
-                  "snapshot_source",
-                  "unknown"
-              )
-
-              candidates = find_candidates(
-                  data
-              )
-
-              strategy_count += 1
-
-              lines.append("")
-
-              lines.append(
-                  f"🔹 {strategy_display}"
-              )
-
-              lines.append(
-                  f"Run ID：{run_id}"
-              )
-
-              lines.append(
-                  f"数据源：{source}"
-              )
-
-              lines.append(
-                  "价格范围：2～30 元"
-              )
-
-              lines.append("")
-
-              if candidates is None:
-
-                  lines.append(
-                      "⚠️ 未找到股票列表"
-                  )
-
-                  continue
-
-              # -------------------------------------------------
-              # 按排名排序
-              # -------------------------------------------------
-
-              candidates = sorted(
-                  candidates,
-                  key=get_rank
-              )
-
-              # -------------------------------------------------
-              # 价格过滤：2～30 元
-              #
-              # 注意：
-              # 这是最终飞书展示阶段过滤。
-              # 不修改作者原版策略。
-              # -------------------------------------------------
-
-              filtered_candidates = []
-
-              for stock in candidates:
-
-                  price = get_price(stock)
-
-                  if price is None:
-                      continue
-
-                  if 2.0 <= price <= 30.0:
-                      filtered_candidates.append(stock)
-
-              top5 = filtered_candidates[:5]
-
-              if not top5:
-
-                  lines.append(
-                      "⚠️ 2～30 元范围内没有候选股票"
-                  )
-
-                  lines.append("")
-
-                  continue
-
-              # =================================================
-              # 输出 Top 5
-              # =================================================
-
-              for index, stock in enumerate(
-                  top5,
-                  start=1
-              ):
-
-                  if not isinstance(
-                      stock,
-                      dict
-                  ):
-
-                      continue
-
-                  code = (
-                      stock.get("code")
-                      or stock.get("symbol")
-                      or stock.get("stock_code")
-                      or "-"
-                  )
-
-                  name = (
-                      stock.get("name")
-                      or stock.get("stock_name")
-                      or "-"
-                  )
-
-                  final_score = stock.get(
-                      "final_score"
-                  )
-
-                  if final_score is None:
-
-                      final_score = stock.get(
-                          "score"
-                      )
-
-                  screen_score = stock.get(
-                      "screen_score"
-                  )
-
-                  price = get_price(stock)
-
-                  change_pct = stock.get(
-                      "change_pct"
-                  )
-
-                  if change_pct is None:
-
-                      change_pct = stock.get(
-                          "change"
-                      )
-
-                  pe = stock.get(
-                      "pe_ratio"
-                  )
-
-                  if pe is None:
-
-                      pe = stock.get(
-                          "pe"
-                      )
-
-                  pb = stock.get(
-                      "pb_ratio"
-                  )
-
-                  if pb is None:
-
-                      pb = stock.get(
-                          "pb"
-                      )
-
-                  risk = (
-                      stock.get("risk_level")
-                      or stock.get("risk")
-                      or "-"
-                  )
-
-                  lines.append(
-                      f"{index}. {name}（{code}）"
-                  )
-
-                  lines.append(
-                      "   ⭐ 评分："
-                      + number(
-                          final_score,
-                          1
-                      )
-                  )
-
-                  if screen_score is not None:
-
-                      lines.append(
-                          "   筛选评分："
-                          + number(
-                              screen_score,
-                              1
-                          )
-                      )
-
-                  lines.append(
-                      "   💰 价格："
-                      + number(
-                          price,
-                          2
-                      )
-                      + " 元"
-                  )
-
-                  lines.append(
-                      "   📈 涨跌："
-                      + number(
-                          change_pct,
-                          2
-                      )
-                      + "%"
-                  )
-
-                  lines.append(
-                      "   PE："
-                      + number(
-                          pe,
-                          2
-                      )
-                  )
-
-                  lines.append(
-                      "   PB："
-                      + number(
-                          pb,
-                          2
-                      )
-                  )
-
-                  lines.append(
-                      "   风险："
-                      + str(risk)
-                  )
-
-                  lines.append("")
-
-              lines.append(
-                  "━━━━━━━━━━━━━━━━"
-              )
-
-          lines.append("")
-
-          lines.append(
-              f"✅ 本次成功读取 {strategy_count} 个策略"
-          )
-
-          lines.append("")
-
-          lines.append(
-              "📌 当前六策略："
-          )
-
-          lines.append(
-              "1. 均衡多因子"
-          )
-
-          lines.append(
-              "2. 趋势质量"
-          )
-
-          lines.append(
-              "3. 放量突破"
-          )
-
-          lines.append(
-              "4. 缩量回踩"
-          )
-
-          lines.append(
-              "5. 超跌反转"
-          )
-
-          lines.append(
-              "6. 资金热度"
-          )
-
-          lines.append("")
-
-          lines.append(
-              "⚠️ 当前阶段为六策略分别选股，"
-              "暂未进行跨策略最终 Top 5 合并。"
-          )
-
-          lines.append(
-              "⚠️ 价格范围 2～30 元已在最终结果阶段执行。"
-          )
-
-          lines.append(
-              "⚠️ 东方财富主力资金目前仅进行接口测试，"
-              "尚未加入最终选股评分。"
-          )
-
-          lines.append(
-              "⚠️ 以上为程序筛选结果，"
-              "不构成投资建议。"
-          )
-
-          message = "\n".join(lines)
-
-          # =====================================================
-          # 打印飞书消息
-          # =====================================================
-
-          print("")
-          print(
-              "========== 飞书消息 =========="
-          )
-
-          print(message)
-
-          print(
-              "=============================="
-          )
-
-          # =====================================================
-          # 发送飞书
-          # =====================================================
-
-          payload = {
-              "msg_type": "text",
-              "content": {
-                  "text": message
-              }
-          }
-
-          response = requests.post(
-              webhook,
-              json=payload,
-              timeout=20
-          )
-
-          print(
-              "Feishu HTTP status:",
-              response.status_code
-          )
-
-          print(
-              "Feishu response:",
-              response.text
-          )
-
-          response.raise_for_status()
-
-          try:
-
-              result = response.json()
-
-              if result.get("code") not in (
-                  None,
-                  0
-              ):
-
-                  raise RuntimeError(
-                      "飞书返回错误："
-                      + str(result)
-                  )
-
-          except ValueError:
-
-              pass
-
-          print("")
-
-          print(
-              "✅ 六策略结果已成功发送到飞书"
-          )
-
           PY
