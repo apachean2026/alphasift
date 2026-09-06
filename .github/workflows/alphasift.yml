@@ -29,10 +29,6 @@ jobs:
         run: |
           alphasift strategies
 
-      - name: 5. Quickstart
-        run: |
-          alphasift quickstart
-
-      - name: 6. Daily screening
+      - name: 5. Daily screening
         run: |
           alphasift screen dual_low --no-llm --save-run
