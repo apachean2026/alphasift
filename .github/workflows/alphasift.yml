@@ -1,148 +1,3893 @@
-name: 测试资金流金额解析
+name: AlphaSift 每日智能选股
 
 on:
   workflow_dispatch:
 
+  # 北京时间周一至周五 15:30
+  # GitHub Actions 使用 UTC
+  # 北京时间 = UTC + 8
+  schedule:
+    - cron: "30 7 * * 1-5"
+
+
+permissions:
+  contents: read
+
+
 jobs:
-  fund-flow-parse:
+
+  alphasift:
+
     runs-on: ubuntu-latest
 
+    env:
+      TZ: Asia/Shanghai
+
     steps:
-      - name: Checkout
+
+      # =========================================================
+      # 1. Checkout
+      # =========================================================
+
+      - name: 1. Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v6
+
+      # =========================================================
+      # 2. Setup Python
+      # =========================================================
+
+      - name: 2. Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install akshare pandas
 
-      - name: 测试同花顺个股资金流金额解析
+      # =========================================================
+      # 3. Install
+      # =========================================================
+
+      - name: 3. Install AlphaSift
         run: |
+
+          set -e
+
+          python -m pip install --upgrade pip
+
+          pip install -e .
+
+          pip install -U \
+            akshare \
+            pandas \
+            requests \
+            baostock
+
+
+      # =========================================================
+      # 4. List strategies
+      # =========================================================
+
+      - name: 4. List strategies
+        run: |
+
+          set -e
+
+          echo "========================================"
+          echo "AlphaSift 策略列表"
+          echo "========================================"
+
+          alphasift strategies
+
+
+      # =========================================================
+      # 5. Generate industry map
+      # =========================================================
+
+      - name: 5. Generate industry map
+        run: |
+
+          set -e
+
+          mkdir -p data
+
           python - <<'PY'
+
+          import baostock as bs
+          import pandas as pd
+
+
+          print("=" * 80)
+          print("开始获取 A 股行业分类")
+          print("=" * 80)
+
+
+          login = bs.login()
+
+
+          print(
+              "Baostock login:",
+              login.error_code,
+              login.error_msg
+          )
+
+
+          if login.error_code != "0":
+
+              raise RuntimeError(
+                  "Baostock 登录失败："
+                  + str(login.error_msg)
+              )
+
+
+          try:
+
+              rs = bs.query_stock_industry()
+
+
+              print(
+                  "query_stock_industry:",
+                  rs.error_code,
+                  rs.error_msg
+              )
+
+
+              if rs.error_code != "0":
+
+                  raise RuntimeError(
+                      "获取行业数据失败："
+                      + str(rs.error_msg)
+                  )
+
+
+              rows = []
+
+
+              while rs.next():
+
+                  rows.append(
+                      rs.get_row_data()
+                  )
+
+
+              if not rows:
+
+                  raise RuntimeError(
+                      "Baostock 没有返回行业数据"
+                  )
+
+
+              df = pd.DataFrame(
+                  rows,
+                  columns=rs.fields
+              )
+
+
+              output = pd.DataFrame()
+
+
+              output["code"] = (
+
+                  df["code"]
+                  .astype(str)
+                  .str.replace(
+                      "sh.",
+                      "",
+                      regex=False
+                  )
+                  .str.replace(
+                      "sz.",
+                      "",
+                      regex=False
+                  )
+                  .str.replace(
+                      "bj.",
+                      "",
+                      regex=False
+                  )
+                  .str.strip()
+                  .str.zfill(6)
+
+              )
+
+
+              output["industry"] = (
+
+                  df["industry"]
+                  .fillna("")
+                  .astype(str)
+                  .str.strip()
+
+              )
+
+
+              output["concepts"] = ""
+
+
+              output = output[
+                  output["code"].str.match(
+                      r"^\d{6}$"
+                  )
+              ]
+
+
+              output = output.drop_duplicates(
+                  subset=["code"],
+                  keep="first"
+              )
+
+
+              output = output[
+                  output["industry"].str.len() > 0
+              ]
+
+
+              if output.empty:
+
+                  raise RuntimeError(
+                      "生成的行业映射为空"
+                  )
+
+
+              output.to_csv(
+                  "data/industry_map.csv",
+                  index=False,
+                  encoding="utf-8-sig"
+              )
+
+
+              print(
+                  "行业映射完成：",
+                  len(output),
+                  "只股票"
+              )
+
+
+              print(
+                  output.head(10).to_string(
+                      index=False
+                  )
+              )
+
+
+          finally:
+
+              bs.logout()
+
+              print(
+                  "Baostock 已退出"
+              )
+
+          PY
+
+
+      # =========================================================
+      # 6. Record existing runs
+      # =========================================================
+
+      - name: 6. Record existing runs
+        run: |
+
+          set -e
+
+          mkdir -p data/runs
+
+          python - <<'PY'
+
+          import json
+          from pathlib import Path
+
+
+          run_dir = Path(
+              "data/runs"
+          )
+
+
+          files = sorted(
+
+              str(
+                  p.resolve()
+              )
+
+              for p in run_dir.glob(
+                  "*.json"
+              )
+
+          )
+
+
+          Path(
+              "data/runs_before.json"
+          ).write_text(
+
+              json.dumps(
+                  files,
+                  ensure_ascii=False,
+                  indent=2
+              ),
+
+              encoding="utf-8"
+
+          )
+
+
+          print(
+              "运行前已有 JSON：",
+              len(files)
+          )
+
+          PY
+
+
+      # =========================================================
+      # 7. Six official AlphaSift strategies
+      # =========================================================
+
+      - name: 7. Daily screening - 6 strategies
+        env:
+          INDUSTRY_MAP_FILES: ./data/industry_map.csv
+          INDUSTRY_PROVIDER: none
+        run: |
+
+          set -e
+
+          echo "========================================"
+          echo "AlphaSift 六策略开始"
+          echo "========================================"
+
+
+          echo ""
+          echo "1/6 balanced_alpha"
+
+          alphasift screen \
+            balanced_alpha \
+            --no-llm \
+            --save-run
+
+
+          echo ""
+          echo "2/6 momentum_quality"
+
+          alphasift screen \
+            momentum_quality \
+            --no-llm \
+            --save-run
+
+
+          echo ""
+          echo "3/6 volume_breakout"
+
+          alphasift screen \
+            volume_breakout \
+            --no-llm \
+            --save-run
+
+
+          echo ""
+          echo "4/6 shrink_pullback"
+
+          alphasift screen \
+            shrink_pullback \
+            --no-llm \
+            --save-run
+
+
+          echo ""
+          echo "5/6 oversold_reversal"
+
+          alphasift screen \
+            oversold_reversal \
+            --no-llm \
+            --save-run
+
+
+          echo ""
+          echo "6/6 capital_heat"
+
+          alphasift screen \
+            capital_heat \
+            --no-llm \
+            --save-run
+
+
+          echo ""
+          echo "========================================"
+          echo "六策略执行完成"
+          echo "========================================"
+
+
+      # =========================================================
+      # 8. Multi-layer quantitative filtering
+      # =========================================================
+
+      - name: 8. Multi-layer quantitative filtering
+        if: success()
+        run: |
+
+          set -e
+
+          python - <<'PY'
+
+          import json
+          import re
+          import time
+          from pathlib import Path
+
           import akshare as ak
           import pandas as pd
-          import re
 
-          print("=" * 80)
-          print("同花顺个股资金流金额解析测试")
-          print("=" * 80)
 
-          # --------------------------------------------------
-          # 金额统一转换为“亿元”
-          # --------------------------------------------------
-          def parse_money(value):
-              if pd.isna(value):
+          # =====================================================
+          # 基础工具
+          # =====================================================
+
+          def clean_code(value):
+
+              if value is None:
+                  return ""
+
+              s = str(value).strip()
+
+
+              if s.endswith(".0"):
+                  s = s[:-2]
+
+
+              digits = re.sub(
+                  r"\D",
+                  "",
+                  s
+              )
+
+
+              if not digits:
+                  return ""
+
+
+              return digits.zfill(6)
+
+
+          def safe_float(value):
+
+              if value is None:
                   return None
 
-              s = str(value).strip().replace(",", "")
+
+              try:
+
+                  if pd.isna(value):
+                      return None
+
+              except Exception:
+                  pass
+
+
+              try:
+
+                  return float(value)
+
+              except Exception:
+
+                  return None
+
+
+          def parse_bool(value):
+
+              if isinstance(
+                  value,
+                  bool
+              ):
+
+                  return value
+
+
+              if value is None:
+                  return None
+
+
+              text = str(
+                  value
+              ).strip().lower()
+
+
+              if text in {
+                  "true",
+                  "1",
+                  "yes",
+                  "y",
+                  "是",
+                  "多头",
+                  "bullish"
+              }:
+
+                  return True
+
+
+              if text in {
+                  "false",
+                  "0",
+                  "no",
+                  "n",
+                  "否",
+                  "空头",
+                  "bearish"
+              }:
+
+                  return False
+
+
+              return None
+
+
+          def parse_money_yi(value):
+
+              if value is None:
+                  return None
+
+
+              try:
+
+                  if pd.isna(value):
+                      return None
+
+              except Exception:
+                  pass
+
+
+              s = str(
+                  value
+              ).strip().replace(
+                  ",",
+                  ""
+              )
+
 
               if not s:
                   return None
 
-              try:
-                  # 亿元
-                  if s.endswith("亿"):
-                      return float(s[:-1])
 
-                  # 万元 -> 亿元
-                  if s.endswith("万"):
-                      return float(s[:-1]) / 10000
+              if s in {
+                  "-",
+                  "--",
+                  "None",
+                  "nan",
+                  "NaN"
+              }:
 
-                  # 千元 -> 亿元
-                  if s.endswith("千"):
-                      return float(s[:-1]) / 100000
-
-                  # 纯数字
-                  return float(s)
-
-              except Exception:
-                  print(f"无法解析金额: {repr(value)}")
                   return None
 
 
-          print("\n[1] 获取同花顺个股资金流")
+              try:
 
-          df = ak.stock_fund_flow_individual(symbol="即时")
+                  if s.endswith("亿"):
 
-          print(f"数据行数：{len(df)}")
-          print(f"字段：{list(df.columns)}")
+                      return float(
+                          s[:-1]
+                      )
 
 
-          # --------------------------------------------------
-          # 测试股票
-          # --------------------------------------------------
-          test_codes = [
-              "600150",
-              "300308",
-              "600519",
-              "300750",
+                  if s.endswith("万"):
+
+                      return (
+                          float(
+                              s[:-1]
+                          )
+                          / 10000
+                      )
+
+
+                  if s.endswith("千"):
+
+                      return (
+                          float(
+                              s[:-1]
+                          )
+                          / 100000
+                      )
+
+
+                  return float(s)
+
+              except Exception:
+
+                  return None
+
+
+          def normalize_text(value):
+
+              if value is None:
+                  return ""
+
+
+              text = str(
+                  value
+              ).strip().lower()
+
+
+              text = re.sub(
+                  r"[\s\-_—·•,，。/（）()【】\[\]：:]",
+                  "",
+                  text
+              )
+
+
+              return text
+
+
+          def recursive_find(
+              obj,
+              keys
+          ):
+
+              if isinstance(
+                  obj,
+                  dict
+              ):
+
+                  for key in keys:
+
+                      if key in obj:
+
+                          value = obj[key]
+
+                          if value is not None:
+
+                              return value
+
+
+                  for value in obj.values():
+
+                      result = recursive_find(
+                          value,
+                          keys
+                      )
+
+                      if result is not None:
+
+                          return result
+
+
+              elif isinstance(
+                  obj,
+                  list
+              ):
+
+                  for value in obj:
+
+                      result = recursive_find(
+                          value,
+                          keys
+                      )
+
+                      if result is not None:
+
+                          return result
+
+
+              return None
+
+
+          def collect_candidate_dicts(
+              obj,
+              result=None
+          ):
+
+              if result is None:
+                  result = []
+
+
+              if isinstance(
+                  obj,
+                  dict
+              ):
+
+                  code_value = (
+
+                      obj.get("code")
+
+                      or obj.get("symbol")
+
+                      or obj.get("stock_code")
+
+                      or obj.get("stockCode")
+
+                      or obj.get("ts_code")
+
+                  )
+
+
+                  if clean_code(
+                      code_value
+                  ):
+
+                      result.append(
+                          obj
+                      )
+
+
+                  for value in obj.values():
+
+                      collect_candidate_dicts(
+                          value,
+                          result
+                      )
+
+
+              elif isinstance(
+                  obj,
+                  list
+              ):
+
+                  for value in obj:
+
+                      collect_candidate_dicts(
+                          value,
+                          result
+                      )
+
+
+              return result
+
+
+          def find_candidates(data):
+
+              candidates = (
+                  collect_candidate_dicts(
+                      data
+                  )
+              )
+
+
+              unique = {}
+
+
+              for item in candidates:
+
+                  code = clean_code(
+
+                      item.get("code")
+
+                      or item.get("symbol")
+
+                      or item.get("stock_code")
+
+                      or item.get("stockCode")
+
+                      or item.get("ts_code")
+
+                  )
+
+
+                  if code:
+
+                      unique[
+                          code
+                      ] = item
+
+
+              return list(
+                  unique.values()
+              )
+
+
+          def flatten_text_values(value):
+
+              result = []
+
+
+              if value is None:
+                  return result
+
+
+              if isinstance(
+                  value,
+                  str
+              ):
+
+                  text = value.strip()
+
+                  if text:
+                      result.append(text)
+
+                  return result
+
+
+              if isinstance(
+                  value,
+                  (int, float)
+              ):
+
+                  return result
+
+
+              if isinstance(
+                  value,
+                  dict
+              ):
+
+                  for key in [
+                      "name",
+                      "title",
+                      "concept",
+                      "theme",
+                      "board",
+                      "label"
+                  ]:
+
+                      if key in value:
+
+                          result.extend(
+                              flatten_text_values(
+                                  value[key]
+                              )
+                          )
+
+                  return result
+
+
+              if isinstance(
+                  value,
+                  list
+              ):
+
+                  for item in value:
+
+                      result.extend(
+                          flatten_text_values(
+                              item
+                          )
+                      )
+
+
+              return result
+
+
+          def recursive_collect(
+              obj,
+              keys
+          ):
+
+              result = []
+
+
+              if isinstance(
+                  obj,
+                  dict
+              ):
+
+                  for key, value in obj.items():
+
+                      if key in keys:
+
+                          result.append(
+                              value
+                          )
+
+
+                      result.extend(
+                          recursive_collect(
+                              value,
+                              keys
+                          )
+                      )
+
+
+              elif isinstance(
+                  obj,
+                  list
+              ):
+
+                  for value in obj:
+
+                      result.extend(
+                          recursive_collect(
+                              value,
+                              keys
+                          )
+                      )
+
+
+              return result
+
+
+          def get_stock_name(stock):
+
+              value = recursive_find(
+
+                  stock,
+
+                  [
+                      "name",
+                      "stock_name",
+                      "stockName",
+                      "security_name",
+                      "股票简称"
+                  ]
+
+              )
+
+
+              return (
+                  str(value).strip()
+                  if value is not None
+                  else "-"
+              )
+
+
+          def call_with_retry(
+              func,
+              name,
+              attempts=3,
+              delay=5
+          ):
+
+              last_error = None
+
+
+              for attempt in range(
+                  1,
+                  attempts + 1
+              ):
+
+                  try:
+
+                      print(
+                          f"{name} 第 {attempt}/{attempts} 次请求"
+                      )
+
+
+                      result = func()
+
+
+                      if result is None:
+
+                          raise RuntimeError(
+                              f"{name} 返回 None"
+                          )
+
+
+                      if hasattr(
+                          result,
+                          "empty"
+                      ) and result.empty:
+
+                          raise RuntimeError(
+                              f"{name} 返回空数据"
+                          )
+
+
+                      return result
+
+
+                  except Exception as exc:
+
+                      last_error = exc
+
+                      print(
+                          f"{name} 失败：",
+                          exc
+                      )
+
+
+                      if attempt < attempts:
+
+                          time.sleep(
+                              delay * attempt
+                          )
+
+
+              raise RuntimeError(
+                  f"{name} 连续 {attempts} 次失败："
+                  f"{last_error}"
+              )
+
+
+          def percentile_score(
+              rank,
+              total,
+              max_score
+          ):
+
+              if not rank or total <= 0:
+                  return 0.0
+
+
+              if total == 1:
+                  return max_score
+
+
+              percentile = (
+                  total - rank
+              ) / (
+                  total - 1
+              )
+
+
+              return max(
+                  0.0,
+                  min(
+                      max_score,
+                      percentile * max_score
+                  )
+              )
+
+
+          # =====================================================
+          # 读取本次新产生的 JSON
+          # =====================================================
+
+          run_dir = Path(
+              "data/runs"
+          )
+
+
+          before_file = Path(
+              "data/runs_before.json"
+          )
+
+
+          before = set()
+
+
+          if before_file.exists():
+
+              before = set(
+                  json.loads(
+                      before_file.read_text(
+                          encoding="utf-8"
+                      )
+                  )
+              )
+
+
+          after = sorted(
+
+              [
+
+                  p
+
+                  for p in run_dir.glob(
+                      "*.json"
+                  )
+
+                  if str(
+                      p.resolve()
+                  ) not in before
+
+              ],
+
+              key=lambda p:
+                  p.stat().st_mtime,
+
+              reverse=True
+
+          )
+
+
+          print("=" * 80)
+          print("本次新产生的策略运行文件")
+          print("=" * 80)
+
+
+          print(
+              "新 JSON：",
+              len(after)
+          )
+
+
+          # =====================================================
+          # 六策略识别
+          # =====================================================
+
+          required_strategies = [
+
+              "balanced_alpha",
+              "momentum_quality",
+              "volume_breakout",
+              "shrink_pullback",
+              "oversold_reversal",
+              "capital_heat"
+
           ]
 
-          print("\n" + "=" * 80)
-          print("[2] 测试资金字段原始值 + 解析结果")
-          print("=" * 80)
+
+          strategy_files = {}
 
 
-          for code in test_codes:
+          for path in after:
 
-              print("\n" + "-" * 80)
-              print(f"股票代码：{code}")
+              try:
 
-              stock_code = int(code)
+                  data = json.loads(
+                      path.read_text(
+                          encoding="utf-8"
+                      )
+                  )
 
-              rows = df[df["股票代码"] == stock_code]
+              except Exception as exc:
 
-              if rows.empty:
-                  print("❌ 没有找到股票")
+                  print(
+                      "JSON读取失败：",
+                      path,
+                      exc
+                  )
+
                   continue
 
-              row = rows.iloc[0]
 
-              print(f"股票简称：{row['股票简称']}")
-
-              print("\n原始资金字段：")
-
-              print("流入资金：", repr(row["流入资金"]))
-              print("流出资金：", repr(row["流出资金"]))
-              print("净额：    ", repr(row["净额"]))
-              print("成交额：  ", repr(row["成交额"]))
-
-              inflow = parse_money(row["流入资金"])
-              outflow = parse_money(row["流出资金"])
-              net = parse_money(row["净额"])
-              turnover = parse_money(row["成交额"])
-
-              print("\n解析为亿元：")
-
-              print("流入资金：", inflow)
-              print("流出资金：", outflow)
-              print("净额：    ", net)
-              print("成交额：  ", turnover)
-
-              if net is not None and turnover not in (None, 0):
-
-                  strength = net / turnover * 100
-
-                  print("\n资金流强度：")
-                  print(f"{strength:.2f}%")
-
-                  if strength > 0:
-                      print("资金方向：净流入")
-                  elif strength < 0:
-                      print("资金方向：净流出")
-                  else:
-                      print("资金方向：持平")
-
-              print("-" * 80)
+              strategy = str(
+                  data.get(
+                      "strategy",
+                      ""
+                  )
+              ).strip()
 
 
-          print("\n" + "=" * 80)
-          print("测试完成")
+              path_text = path.stem.lower()
+
+
+              if strategy not in required_strategies:
+
+                  for expected in required_strategies:
+
+                      if expected in path_text:
+
+                          strategy = expected
+
+                          break
+
+
+              if strategy in required_strategies:
+
+                  if strategy not in strategy_files:
+
+                      strategy_files[
+                          strategy
+                      ] = path
+
+
+          print(
+              "识别到策略：",
+              sorted(
+                  strategy_files.keys()
+              )
+          )
+
+
+          missing = [
+
+              strategy
+
+              for strategy
+              in required_strategies
+
+              if strategy
+              not in strategy_files
+
+          ]
+
+
+          if missing:
+
+              raise RuntimeError(
+                  "以下策略没有产生本次运行结果："
+                  + ", ".join(missing)
+              )
+
+
+          # =====================================================
+          # 合并六策略候选
+          # =====================================================
+
+          all_candidates = {}
+
+
+          for strategy in required_strategies:
+
+              path = strategy_files[
+                  strategy
+              ]
+
+
+              data = json.loads(
+                  path.read_text(
+                      encoding="utf-8"
+                  )
+              )
+
+
+              candidates = find_candidates(
+                  data
+              )
+
+
+              print(
+                  strategy,
+                  "候选：",
+                  len(candidates)
+              )
+
+
+              for stock in candidates:
+
+                  code = clean_code(
+
+                      stock.get("code")
+
+                      or stock.get("symbol")
+
+                      or stock.get("stock_code")
+
+                      or stock.get("stockCode")
+
+                      or stock.get("ts_code")
+
+                  )
+
+
+                  if not code:
+                      continue
+
+
+                  if code not in all_candidates:
+
+                      item = dict(
+                          stock
+                      )
+
+                      item["code"] = code
+
+                      item["name"] = get_stock_name(
+                          stock
+                      )
+
+                      item["strategies"] = []
+
+                      all_candidates[
+                          code
+                      ] = item
+
+
+                  if strategy not in (
+                      all_candidates[
+                          code
+                      ]["strategies"]
+                  ):
+
+                      all_candidates[
+                          code
+                      ]["strategies"].append(
+                          strategy
+                      )
+
+
+          print(
+              "六策略合并候选：",
+              len(all_candidates)
+          )
+
+
+          if not all_candidates:
+
+              raise RuntimeError(
+                  "六个策略没有产生任何候选股票"
+              )
+
+
+          # =====================================================
+          # 价格 2～30
+          # =====================================================
+
+          price_candidates = {}
+
+
+          for code, stock in all_candidates.items():
+
+              price = safe_float(
+
+                  recursive_find(
+
+                      stock,
+
+                      [
+                          "current_price",
+                          "price",
+                          "latest_price",
+                          "close",
+                          "最新价"
+                      ]
+
+                  )
+
+              )
+
+
+              if price is None:
+                  continue
+
+
+              if 2.0 <= price <= 30.0:
+
+                  stock["price"] = price
+
+                  price_candidates[
+                      code
+                  ] = stock
+
+
+          print(
+              "价格 2～30 元后：",
+              len(price_candidates)
+          )
+
+
+          if not price_candidates:
+
+              raise RuntimeError(
+                  "价格 2～30 元过滤后没有候选股票"
+              )
+
+
+          # =====================================================
+          # 行业映射
+          # =====================================================
+
+          industry_df = pd.read_csv(
+              "data/industry_map.csv",
+              dtype=str
+          )
+
+
+          industry_map = {}
+
+
+          for _, row in industry_df.iterrows():
+
+              code = clean_code(
+                  row.get("code")
+              )
+
+
+              industry = str(
+                  row.get(
+                      "industry",
+                      ""
+                  )
+              ).strip()
+
+
+              if code and industry:
+
+                  industry_map[
+                      code
+                  ] = industry
+
+
+          print(
+              "行业映射：",
+              len(industry_map)
+          )
+
+
+          # =====================================================
+          # 个股资金流
+          # =====================================================
+
+          print("=" * 80)
+          print("获取同花顺个股资金流")
           print("=" * 80)
 
+
+          stock_flow = call_with_retry(
+
+              lambda:
+                  ak.stock_fund_flow_individual(
+                      symbol="即时"
+                  ),
+
+              "个股资金流"
+
+          )
+
+
+          stock_flow_map = {}
+
+
+          for _, row in stock_flow.iterrows():
+
+              code = clean_code(
+                  row.get("股票代码")
+              )
+
+
+              if not code:
+                  continue
+
+
+              inflow = parse_money_yi(
+                  row.get("流入资金")
+              )
+
+
+              outflow = parse_money_yi(
+                  row.get("流出资金")
+              )
+
+
+              net = parse_money_yi(
+                  row.get("净额")
+              )
+
+
+              turnover = parse_money_yi(
+                  row.get("成交额")
+              )
+
+
+              strength = None
+
+
+              if (
+                  net is not None
+                  and turnover is not None
+                  and turnover > 0
+              ):
+
+                  strength = (
+                      net
+                      / turnover
+                      * 100
+                  )
+
+
+              stock_flow_map[
+                  code
+              ] = {
+
+                  "inflow":
+                      inflow,
+
+                  "outflow":
+                      outflow,
+
+                  "net":
+                      net,
+
+                  "turnover":
+                      turnover,
+
+                  "strength":
+                      strength
+
+              }
+
+
+          pd.DataFrame.from_dict(
+              stock_flow_map,
+              orient="index"
+          ).reset_index(
+              names="code"
+          ).to_csv(
+              "data/stock_flow.csv",
+              index=False,
+              encoding="utf-8-sig"
+          )
+
+
+          # =====================================================
+          # 行业资金流
+          # =====================================================
+
+          print("=" * 80)
+          print("获取同花顺行业资金流")
+          print("=" * 80)
+
+
+          industry_flow = call_with_retry(
+
+              lambda:
+                  ak.stock_fund_flow_industry(
+                      symbol="即时"
+                  ),
+
+              "行业资金流"
+
+          )
+
+
+          industry_flow_map = {}
+
+
+          for _, row in industry_flow.iterrows():
+
+              name = str(
+                  row.get(
+                      "行业",
+                      ""
+                  )
+              ).strip()
+
+
+              if not name:
+                  continue
+
+
+              net = parse_money_yi(
+                  row.get("净额")
+              )
+
+
+              change_pct = safe_float(
+                  row.get(
+                      "行业-涨跌幅"
+                  )
+              )
+
+
+              industry_flow_map[
+                  normalize_text(name)
+              ] = {
+
+                  "name":
+                      name,
+
+                  "net":
+                      net,
+
+                  "change_pct":
+                      change_pct
+
+              }
+
+
+          industry_sorted = sorted(
+
+              [
+
+                  item
+
+                  for item
+                  in industry_flow_map.values()
+
+                  if item["net"] is not None
+
+              ],
+
+              key=lambda x:
+                  x["net"],
+
+              reverse=True
+
+          )
+
+
+          industry_rank = {
+
+              normalize_text(
+                  item["name"]
+              ):
+                  index + 1
+
+              for index, item
+              in enumerate(
+                  industry_sorted
+              )
+
+          }
+
+
+          pd.DataFrame(
+              industry_sorted
+          ).to_csv(
+              "data/industry_flow.csv",
+              index=False,
+              encoding="utf-8-sig"
+          )
+
+
+          # =====================================================
+          # 概念资金流
+          # =====================================================
+
+          concept_flow_map = {}
+
+
+          print("=" * 80)
+          print("获取同花顺概念资金流")
+          print("=" * 80)
+
+
+          try:
+
+              concept_flow = call_with_retry(
+
+                  lambda:
+                      ak.stock_fund_flow_concept(
+                          symbol="即时"
+                      ),
+
+                  "概念资金流"
+
+              )
+
+
+              for _, row in concept_flow.iterrows():
+
+                  name = str(
+                      row.get(
+                          "行业",
+                          ""
+                      )
+                  ).strip()
+
+
+                  if not name:
+                      continue
+
+
+                  net = parse_money_yi(
+                      row.get("净额")
+                  )
+
+
+                  change_pct = safe_float(
+                      row.get(
+                          "行业-涨跌幅"
+                      )
+                  )
+
+
+                  concept_flow_map[
+                      normalize_text(name)
+                  ] = {
+
+                      "name":
+                          name,
+
+                      "net":
+                          net,
+
+                      "change_pct":
+                          change_pct
+
+                  }
+
+
+          except Exception as exc:
+
+              print(
+                  "⚠️ 概念资金流获取失败：",
+                  exc
+              )
+
+              print(
+                  "继续运行，概念层记为不可用"
+              )
+
+
+          concept_sorted = sorted(
+
+              [
+
+                  item
+
+                  for item
+                  in concept_flow_map.values()
+
+                  if item["net"] is not None
+
+              ],
+
+              key=lambda x:
+                  x["net"],
+
+              reverse=True
+
+          )
+
+
+          concept_rank = {
+
+              normalize_text(
+                  item["name"]
+              ):
+                  index + 1
+
+              for index, item
+              in enumerate(
+                  concept_sorted
+              )
+
+          }
+
+
+          pd.DataFrame(
+              concept_sorted
+          ).to_csv(
+              "data/concept_flow.csv",
+              index=False,
+              encoding="utf-8-sig"
+          )
+
+
+          # =====================================================
+          # 最终筛选
+          # =====================================================
+
+          final_candidates = []
+
+
+          for code, stock in price_candidates.items():
+
+              # -------------------------------------------------
+              # 个股资金
+              # -------------------------------------------------
+
+              flow = stock_flow_map.get(
+                  code
+              )
+
+
+              if not flow:
+                  continue
+
+
+              stock_net = flow.get(
+                  "net"
+              )
+
+
+              stock_strength = flow.get(
+                  "strength"
+              )
+
+
+              stock_turnover = flow.get(
+                  "turnover"
+              )
+
+
+              # 正式硬过滤
+              if stock_net is None:
+                  continue
+
+
+              if stock_net <= 0:
+                  continue
+
+
+              # -------------------------------------------------
+              # MA
+              # -------------------------------------------------
+
+              ma5 = safe_float(
+                  recursive_find(
+                      stock,
+                      [
+                          "ma5",
+                          "MA5"
+                      ]
+                  )
+              )
+
+
+              ma10 = safe_float(
+                  recursive_find(
+                      stock,
+                      [
+                          "ma10",
+                          "MA10"
+                      ]
+                  )
+              )
+
+
+              ma20 = safe_float(
+                  recursive_find(
+                      stock,
+                      [
+                          "ma20",
+                          "MA20"
+                      ]
+                  )
+              )
+
+
+              ma_bullish = None
+
+
+              if (
+                  ma5 is not None
+                  and ma10 is not None
+                  and ma20 is not None
+              ):
+
+                  ma_bullish = (
+                      ma5 > ma10 > ma20
+                  )
+
+
+              else:
+
+                  explicit_ma = recursive_find(
+
+                      stock,
+
+                      [
+                          "ma_bullish",
+                          "maBullish"
+                      ]
+
+                  )
+
+
+                  ma_bullish = parse_bool(
+                      explicit_ma
+                  )
+
+
+                  if ma_bullish is None:
+
+                      status = recursive_find(
+
+                          stock,
+
+                          [
+                              "ma_alignment",
+                              "ma_status",
+                              "trend_status"
+                          ]
+
+                      )
+
+
+                      if status is not None:
+
+                          text = normalize_text(
+                              status
+                          )
+
+
+                          if any(
+
+                              keyword in text
+
+                              for keyword in [
+                                  "空头",
+                                  "bearish",
+                                  "downtrend"
+                              ]
+
+                          ):
+
+                              ma_bullish = False
+
+
+                          elif any(
+
+                              keyword in text
+
+                              for keyword in [
+                                  "多头",
+                                  "bullish",
+                                  "uptrend"
+                              ]
+
+                          ):
+
+                              ma_bullish = True
+
+
+              if ma_bullish is not True:
+
+                  continue
+
+
+              # -------------------------------------------------
+              # MACD
+              # -------------------------------------------------
+
+              macd_dif = safe_float(
+
+                  recursive_find(
+
+                      stock,
+
+                      [
+                          "macd_dif",
+                          "MACD_DIF",
+                          "dif",
+                          "DIF"
+                      ]
+
+                  )
+
+              )
+
+
+              macd_dea = safe_float(
+
+                  recursive_find(
+
+                      stock,
+
+                      [
+                          "macd_dea",
+                          "MACD_DEA",
+                          "dea",
+                          "DEA"
+                      ]
+
+                  )
+
+              )
+
+
+              macd_bar = safe_float(
+
+                  recursive_find(
+
+                      stock,
+
+                      [
+                          "macd_bar",
+                          "MACD_BAR",
+                          "histogram",
+                          "macd_hist"
+                      ]
+
+                  )
+
+              )
+
+
+              macd_status = recursive_find(
+
+                  stock,
+
+                  [
+                      "macd_status",
+                      "macd_signal"
+                  ]
+
+              )
+
+
+              macd_bullish = None
+
+
+              if (
+                  macd_dif is not None
+                  and macd_dea is not None
+              ):
+
+                  macd_bullish = (
+                      macd_dif > macd_dea
+                  )
+
+
+                  if (
+                      macd_bar is not None
+                      and macd_bar < 0
+                  ):
+
+                      macd_bullish = False
+
+
+              explicit_macd = recursive_find(
+
+                  stock,
+
+                  [
+                      "macd_bullish",
+                      "macdBullish"
+                  ]
+
+              )
+
+
+              explicit_macd_bool = parse_bool(
+                  explicit_macd
+              )
+
+
+              if explicit_macd_bool is False:
+
+                  macd_bullish = False
+
+
+              if (
+                  isinstance(
+                      macd_status,
+                      str
+                  )
+              ):
+
+                  status_text = normalize_text(
+                      macd_status
+                  )
+
+
+                  if any(
+
+                      keyword in status_text
+
+                      for keyword in [
+                          "空头",
+                          "bearish",
+                          "negative",
+                          "deadcross",
+                          "死叉"
+                      ]
+
+                  ):
+
+                      macd_bullish = False
+
+
+                  elif any(
+
+                      keyword in status_text
+
+                      for keyword in [
+                          "多头",
+                          "bullish",
+                          "positive",
+                          "golden",
+                          "金叉"
+                      ]
+
+                  ):
+
+                      if macd_bullish is None:
+
+                          macd_bullish = True
+
+
+              if macd_bullish is not True:
+
+                  continue
+
+
+              # -------------------------------------------------
+              # 行业
+              # -------------------------------------------------
+
+              industry = industry_map.get(
+                  code,
+                  ""
+              )
+
+
+              industry_key = normalize_text(
+                  industry
+              )
+
+
+              industry_info = (
+                  industry_flow_map.get(
+                      industry_key,
+                      {}
+                  )
+              )
+
+
+              industry_net = (
+                  industry_info.get(
+                      "net"
+                  )
+              )
+
+
+              industry_change = (
+                  industry_info.get(
+                      "change_pct"
+                  )
+              )
+
+
+              industry_position = (
+                  industry_rank.get(
+                      industry_key
+                  )
+              )
+
+
+              # -------------------------------------------------
+              # 主题/板块热度
+              # -------------------------------------------------
+
+              theme_heat = safe_float(
+
+                  recursive_find(
+
+                      stock,
+
+                      [
+                          "theme_heat",
+                          "theme_heat_score",
+                          "board_heat",
+                          "board_heat_score",
+                          "theme_score"
+                      ]
+
+                  )
+
+              )
+
+
+              theme_score = 0.0
+
+
+              if theme_heat is not None:
+
+                  if 0 <= theme_heat <= 1:
+
+                      theme_score = (
+                          theme_heat * 5
+                      )
+
+                  elif 0 <= theme_heat <= 100:
+
+                      theme_score = (
+                          theme_heat / 100 * 5
+                      )
+
+                  else:
+
+                      theme_score = 5.0
+
+
+              # -------------------------------------------------
+              # 股票概念
+              # -------------------------------------------------
+
+              concept_values = recursive_collect(
+
+                  stock,
+
+                  [
+                      "concepts",
+                      "concept",
+                      "themes",
+                      "theme",
+                      "boards",
+                      "board"
+                  ]
+
+              )
+
+
+              candidate_concepts = []
+
+
+              for value in concept_values:
+
+                  candidate_concepts.extend(
+                      flatten_text_values(
+                          value
+                      )
+                  )
+
+
+              candidate_concepts = list(
+
+                  dict.fromkeys(
+
+                      [
+                          x.strip()
+                          for x in candidate_concepts
+                          if x.strip()
+                      ]
+
+                  )
+
+              )
+
+
+              matched_concepts = []
+
+
+              for concept in candidate_concepts:
+
+                  key = normalize_text(
+                      concept
+                  )
+
+
+                  if key in concept_flow_map:
+
+                      matched_concepts.append(
+                          key
+                      )
+
+
+              concept_details = []
+
+
+              for key in matched_concepts:
+
+                  info = concept_flow_map[
+                      key
+                  ]
+
+
+                  concept_details.append({
+
+                      "name":
+                          info["name"],
+
+                      "net":
+                          info["net"],
+
+                      "change_pct":
+                          info["change_pct"],
+
+                      "rank":
+                          concept_rank.get(
+                              key
+                          )
+
+                  })
+
+
+              concept_details.sort(
+
+                  key=lambda x:
+                      x["net"]
+                      if x["net"] is not None
+                      else -999999,
+
+                  reverse=True
+
+              )
+
+
+              concept_net = None
+
+
+              if concept_details:
+
+                  concept_net = (
+                      concept_details[0]["net"]
+                  )
+
+
+              # =================================================
+              # 综合评分
+              # =================================================
+
+              score = 0.0
+
+
+              # 1. 策略共振 0～25
+              strategy_count = len(
+
+                  set(
+                      stock.get(
+                          "strategies",
+                          []
+                      )
+                  )
+
+              )
+
+
+              score += min(
+                  strategy_count * 5,
+                  25
+              )
+
+
+              # 2. MA 15
+              score += 15
+
+
+              # 3. MACD 15
+              score += 15
+
+
+              # 4. 个股资金 10
+              score += 10
+
+
+              # 5. 个股资金强度 0～10
+              if stock_strength is not None:
+
+                  strength_score = max(
+
+                      0.0,
+
+                      min(
+                          10.0,
+                          5.0
+                          + stock_strength
+                          * 2.0
+                      )
+
+                  )
+
+                  score += strength_score
+
+
+              # 6. 行业资金 0～10
+              if industry_net is not None:
+
+                  if industry_net > 0:
+
+                      score += 10
+
+
+                  elif industry_net == 0:
+
+                      score += 3
+
+
+              # 7. 主题/概念 0～10
+              theme_concept_score = (
+                  theme_score
+              )
+
+
+              if concept_net is not None:
+
+                  if concept_net > 0:
+
+                      theme_concept_score += 5
+
+                  elif concept_net < 0:
+
+                      theme_concept_score -= 3
+
+
+              if (
+                  industry_change is not None
+                  and industry_net is not None
+                  and industry_change > 0
+                  and industry_net > 0
+              ):
+
+                  score += 2
+
+
+              score += max(
+                  0.0,
+                  min(
+                      10.0,
+                      theme_concept_score
+                  )
+              )
+
+
+              score = max(
+                  0.0,
+                  min(
+                      100.0,
+                      score
+                  )
+              )
+
+
+              # =================================================
+              # 保存字段
+              # =================================================
+
+              stock["name"] = get_stock_name(
+                  stock
+              )
+
+
+              stock["industry"] = industry
+
+
+              stock["stock_net"] = stock_net
+
+              stock["stock_strength"] = (
+                  stock_strength
+              )
+
+              stock["stock_turnover"] = (
+                  stock_turnover
+              )
+
+
+              stock["industry_net"] = (
+                  industry_net
+              )
+
+              stock["industry_change_pct"] = (
+                  industry_change
+              )
+
+              stock["industry_rank"] = (
+                  industry_position
+              )
+
+
+              stock["theme_heat"] = (
+                  theme_heat
+              )
+
+              stock["theme_score"] = (
+                  round(
+                      theme_score,
+                      2
+                  )
+              )
+
+
+              stock["concepts"] = (
+                  candidate_concepts
+              )
+
+              stock["concept_details"] = (
+                  concept_details
+              )
+
+              stock["concept_net"] = (
+                  concept_net
+              )
+
+
+              stock["ma5"] = ma5
+
+              stock["ma10"] = ma10
+
+              stock["ma20"] = ma20
+
+              stock["ma_bullish"] = (
+                  ma_bullish
+              )
+
+
+              stock["macd_dif"] = (
+                  macd_dif
+              )
+
+              stock["macd_dea"] = (
+                  macd_dea
+              )
+
+              stock["macd_bar"] = (
+                  macd_bar
+              )
+
+              stock["macd_status"] = (
+                  macd_status
+              )
+
+              stock["macd_bullish"] = (
+                  macd_bullish
+              )
+
+
+              stock["quant_score"] = round(
+                  score,
+                  2
+              )
+
+
+              final_candidates.append(
+                  stock
+              )
+
+
+          # =====================================================
+          # 最终排序
+          # =====================================================
+
+          final_candidates.sort(
+
+              key=lambda x:
+                  (
+                      x.get(
+                          "quant_score",
+                          0
+                      ),
+
+                      len(
+                          x.get(
+                              "strategies",
+                              []
+                          )
+                      ),
+
+                      x.get(
+                          "stock_net",
+                          0
+                      )
+
+                  ),
+
+              reverse=True
+
+          )
+
+
+          print("=" * 80)
+          print("最终量化筛选")
+          print("=" * 80)
+
+
+          print(
+              "候选数量：",
+              len(final_candidates)
+          )
+
+
+          if not final_candidates:
+
+              raise RuntimeError(
+                  "价格 + MA + MACD + 个股资金流"
+                  "过滤后没有候选股票"
+              )
+
+
+          # 最多30只交给 Gemini
+          final_candidates = (
+              final_candidates[:30]
+          )
+
+
+          # =====================================================
+          # 保存最终候选
+          # =====================================================
+
+          Path(
+              "data/final_candidates.json"
+          ).write_text(
+
+              json.dumps(
+                  final_candidates,
+                  ensure_ascii=False,
+                  indent=2,
+                  default=str
+              ),
+
+              encoding="utf-8"
+
+          )
+
+
+          pd.DataFrame(
+              final_candidates
+          ).to_csv(
+
+              "data/final_candidates.csv",
+
+              index=False,
+
+              encoding="utf-8-sig"
+
+          )
+
+
+          # =====================================================
+          # 打印
+          # =====================================================
+
+          for index, item in enumerate(
+              final_candidates,
+              1
+          ):
+
+              print(
+
+                  index,
+                  item.get("code"),
+                  item.get("name"),
+                  "价格=",
+                  item.get("price"),
+                  "策略数=",
+                  len(
+                      item.get(
+                          "strategies",
+                          []
+                      )
+                  ),
+                  "MA=",
+                  item.get(
+                      "ma_bullish"
+                  ),
+                  "MACD=",
+                  item.get(
+                      "macd_bullish"
+                  ),
+                  "个股净流入=",
+                  item.get(
+                      "stock_net"
+                  ),
+                  "行业=",
+                  item.get(
+                      "industry"
+                  ),
+                  "行业净流入=",
+                  item.get(
+                      "industry_net"
+                  ),
+                  "主题评分=",
+                  item.get(
+                      "theme_score"
+                  ),
+                  "概念净流入=",
+                  item.get(
+                      "concept_net"
+                  ),
+                  "量化评分=",
+                  item.get(
+                      "quant_score"
+                  )
+
+              )
+
           PY
+
+
+      # =========================================================
+      # 9. Gemini final Top 5
+      # =========================================================
+
+      - name: 9. Gemini final Top 5
+        if: success()
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash-lite
+        run: |
+
+          set -e
+
+          python - <<'PY'
+
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          import requests
+
+
+          candidates = json.loads(
+
+              Path(
+                  "data/final_candidates.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+
+          )
+
+
+          # =====================================================
+          # 备用量化 Top5
+          # =====================================================
+
+          def build_fallback():
+
+              result = []
+
+
+              for item in candidates[:5]:
+
+                  code = str(
+                      item.get(
+                          "code",
+                          ""
+                      )
+                  ).zfill(6)
+
+
+                  result.append({
+
+                      "rank":
+                          len(result) + 1,
+
+                      "code":
+                          code,
+
+                      "name":
+                          item.get(
+                              "name",
+                              "-"
+                          ),
+
+                      "score":
+                          item.get(
+                              "quant_score",
+                              0
+                          ),
+
+                      "reason":
+                          "Gemini不可用，"
+                          "采用量化综合评分",
+
+                      "source":
+                          "quant_fallback"
+
+                  })
+
+
+              return result
+
+
+          api_key = os.environ.get(
+              "GEMINI_API_KEY",
+              ""
+          ).strip()
+
+
+          top5 = []
+
+
+          gemini_status = ""
+
+
+          if not api_key:
+
+              print(
+                  "⚠️ 未配置 GEMINI_API_KEY"
+              )
+
+
+              top5 = build_fallback()
+
+
+              gemini_status = (
+                  "未配置API Key，使用量化Top5"
+              )
+
+
+          else:
+
+              simplified = []
+
+
+              for item in candidates:
+
+                  simplified.append({
+
+                      "code":
+                          item.get("code"),
+
+                      "name":
+                          item.get("name"),
+
+                      "price":
+                          item.get("price"),
+
+                      "strategies":
+                          item.get(
+                              "strategies",
+                              []
+                          ),
+
+                      "industry":
+                          item.get(
+                              "industry"
+                          ),
+
+                      "concepts":
+                          item.get(
+                              "concepts",
+                              []
+                          ),
+
+                      "concept_details":
+                          item.get(
+                              "concept_details",
+                              []
+                          ),
+
+                      "theme_heat":
+                          item.get(
+                              "theme_heat"
+                          ),
+
+                      "theme_score":
+                          item.get(
+                              "theme_score"
+                          ),
+
+                      "quant_score":
+                          item.get(
+                              "quant_score"
+                          ),
+
+                      "ma5":
+                          item.get("ma5"),
+
+                      "ma10":
+                          item.get("ma10"),
+
+                      "ma20":
+                          item.get("ma20"),
+
+                      "ma_bullish":
+                          item.get(
+                              "ma_bullish"
+                          ),
+
+                      "macd_dif":
+                          item.get(
+                              "macd_dif"
+                          ),
+
+                      "macd_dea":
+                          item.get(
+                              "macd_dea"
+                          ),
+
+                      "macd_bar":
+                          item.get(
+                              "macd_bar"
+                          ),
+
+                      "macd_status":
+                          item.get(
+                              "macd_status"
+                          ),
+
+                      "macd_bullish":
+                          item.get(
+                              "macd_bullish"
+                          ),
+
+                      "stock_net":
+                          item.get(
+                              "stock_net"
+                          ),
+
+                      "stock_strength":
+                          item.get(
+                              "stock_strength"
+                          ),
+
+                      "industry_net":
+                          item.get(
+                              "industry_net"
+                          ),
+
+                      "industry_change_pct":
+                          item.get(
+                              "industry_change_pct"
+                          ),
+
+                      "industry_rank":
+                          item.get(
+                              "industry_rank"
+                          )
+
+                  })
+
+
+              prompt = """
+
+你是严格的A股量化最终排序器。
+
+下面的股票已经经过确定性量化筛选。
+
+你只能从输入候选池中选择股票。
+
+禁止：
+
+1. 编造股票代码。
+2. 编造股票名称。
+3. 使用候选池之外的股票。
+4. 修改股票代码。
+5. 使用候选池之外的数据。
+
+候选股票已经经过：
+
+1. 六个 AlphaSift 策略
+2. 价格 2～30 元
+3. 均线多头
+4. MACD
+5. 个股资金流
+6. 行业资金流
+7. 概念资金流
+8. 主题/板块热度
+9. 综合量化评分
+
+优先考虑：
+
+1. 多策略共振
+2. MA5 > MA10 > MA20
+3. MACD 多头
+4. 个股资金净流入
+5. 个股资金流强度
+6. 行业资金净流入
+7. 行业涨幅与资金流共振
+8. 概念资金流
+9. 主题热度
+10. 综合量化评分
+
+风险控制：
+
+如果个股资金和行业资金明显冲突，降低排名。
+
+如果MACD明显转弱，降低排名。
+
+如果均线结构明显转弱，降低排名。
+
+尽量避免最终股票全部来自同一个行业。
+
+如果候选池不少于5只，选择5只。
+
+如果候选池少于5只，则选择实际存在的全部股票。
+
+只能使用输入中的股票。
+
+最终只输出JSON：
+
+{
+  "top5": [
+    {
+      "rank": 1,
+      "code": "股票代码",
+      "name": "股票名称",
+      "score": 95,
+      "reason": "一句话说明原因"
+    }
+  ]
+}
+
+不要输出Markdown。
+
+不要输出代码块。
+
+不要输出额外解释。
+
+候选池：
+
+""" + json.dumps(
+
+                  simplified,
+
+                  ensure_ascii=False,
+
+                  indent=2,
+
+                  default=str
+
+              )
+
+
+              model = os.environ.get(
+                  "GEMINI_MODEL",
+                  "gemini-2.5-flash-lite"
+              ).strip()
+
+
+              url = (
+                  "https://generativelanguage.googleapis.com/"
+                  "v1beta/models/"
+                  + model
+                  + ":generateContent"
+              )
+
+
+              payload = {
+
+                  "contents": [
+
+                      {
+
+                          "parts": [
+
+                              {
+                                  "text": prompt
+                              }
+
+                          ]
+
+                      }
+
+                  ],
+
+                  "generationConfig": {
+
+                      "temperature": 0.1,
+
+                      "maxOutputTokens": 2048,
+
+                      "responseMimeType":
+                          "application/json"
+
+                  }
+
+              }
+
+
+              try:
+
+                  response = requests.post(
+
+                      url,
+
+                      headers={
+
+                          "Content-Type":
+                              "application/json",
+
+                          "x-goog-api-key":
+                              api_key
+
+                      },
+
+                      json=payload,
+
+                      timeout=120
+
+                  )
+
+
+                  print(
+                      "Gemini HTTP:",
+                      response.status_code
+                  )
+
+
+                  response.raise_for_status()
+
+
+                  data = response.json()
+
+
+                  candidates_response = (
+                      data.get(
+                          "candidates",
+                          []
+                      )
+                  )
+
+
+                  if not candidates_response:
+
+                      raise RuntimeError(
+                          "Gemini没有返回candidates"
+                      )
+
+
+                  parts = (
+
+                      candidates_response[0]
+                      .get(
+                          "content",
+                          {}
+                      )
+                      .get(
+                          "parts",
+                          []
+                      )
+
+                  )
+
+
+                  text_parts = [
+
+                      part.get(
+                          "text",
+                          ""
+                      )
+
+                      for part in parts
+
+                      if isinstance(
+                          part,
+                          dict
+                      )
+
+                  ]
+
+
+                  text = "".join(
+                      text_parts
+                  ).strip()
+
+
+                  if not text:
+
+                      raise RuntimeError(
+                          "Gemini返回空文本"
+                      )
+
+
+                  text = re.sub(
+                      r"^```json\s*",
+                      "",
+                      text,
+                      flags=re.I
+                  )
+
+
+                  text = re.sub(
+                      r"^```\s*",
+                      "",
+                      text
+                  )
+
+
+                  text = re.sub(
+                      r"\s*```$",
+                      "",
+                      text
+                  ).strip()
+
+
+                  result = json.loads(
+                      text
+                  )
+
+
+                  raw_top5 = result.get(
+                      "top5",
+                      []
+                  )
+
+
+                  if not isinstance(
+                      raw_top5,
+                      list
+                  ):
+
+                      raise RuntimeError(
+                          "Gemini top5 不是列表"
+                      )
+
+
+                  candidate_map = {
+
+                      str(
+                          item.get(
+                              "code",
+                              ""
+                          )
+                      ).zfill(6):
+                          item
+
+                      for item in candidates
+
+                  }
+
+
+                  top5 = []
+
+
+                  used_codes = set()
+
+
+                  for item in raw_top5:
+
+                      if not isinstance(
+                          item,
+                          dict
+                      ):
+
+                          continue
+
+
+                      code = str(
+                          item.get(
+                              "code",
+                              ""
+                          )
+                      ).strip()
+
+
+                      code = re.sub(
+                          r"\D",
+                          "",
+                          code
+                      ).zfill(6)
+
+
+                      if code not in candidate_map:
+
+                          print(
+                              "⚠️ Gemini返回候选池之外股票：",
+                              code
+                          )
+
+                          continue
+
+
+                      if code in used_codes:
+
+                          continue
+
+
+                      used_codes.add(
+                          code
+                      )
+
+
+                      candidate = candidate_map[
+                          code
+                      ]
+
+
+                      try:
+
+                          score = float(
+                              item.get(
+                                  "score",
+                                  candidate.get(
+                                      "quant_score",
+                                      0
+                                  )
+                              )
+                          )
+
+                      except Exception:
+
+                          score = candidate.get(
+                              "quant_score",
+                              0
+                          )
+
+
+                      score = max(
+                          0,
+                          min(
+                              100,
+                              score
+                          )
+                      )
+
+
+                      top5.append({
+
+                          "rank":
+                              len(top5) + 1,
+
+                          "code":
+                              code,
+
+                          "name":
+                              candidate.get(
+                                  "name",
+                                  "-"
+                              ),
+
+                          "score":
+                              score,
+
+                          "reason":
+                              str(
+                                  item.get(
+                                      "reason",
+                                      ""
+                                  )
+                              )[:200],
+
+                          "source":
+                              "gemini"
+
+                      })
+
+
+                      if len(top5) >= 5:
+                          break
+
+
+                  # Gemini 少于5只时，
+                  # 只能从合法候选中补足
+                  target_count = min(
+                      5,
+                      len(candidates)
+                  )
+
+
+                  if len(top5) < target_count:
+
+                      selected = {
+                          item["code"]
+                          for item in top5
+                      }
+
+
+                      for candidate in candidates:
+
+                          code = str(
+                              candidate.get(
+                                  "code",
+                                  ""
+                              )
+                          ).zfill(6)
+
+
+                          if code in selected:
+
+                              continue
+
+
+                          top5.append({
+
+                              "rank":
+                                  len(top5) + 1,
+
+                              "code":
+                                  code,
+
+                              "name":
+                                  candidate.get(
+                                      "name",
+                                      "-"
+                                  ),
+
+                              "score":
+                                  candidate.get(
+                                      "quant_score",
+                                      0
+                                  ),
+
+                              "reason":
+                                  "Gemini未覆盖，"
+                                  "按量化评分补位",
+
+                              "source":
+                                  "quant_fill"
+
+                          })
+
+
+                          if len(top5) >= target_count:
+
+                              break
+
+
+                  if not top5:
+
+                      raise RuntimeError(
+                          "Gemini没有返回任何合法候选"
+                      )
+
+
+                  gemini_status = (
+                      "Gemini排序成功"
+                  )
+
+
+              except Exception as exc:
+
+                  print(
+                      "⚠️ Gemini失败：",
+                      exc
+                  )
+
+
+                  top5 = build_fallback()
+
+
+                  gemini_status = (
+                      "Gemini失败，"
+                      "使用量化Top5"
+                  )
+
+
+          # =====================================================
+          # 保存
+          # =====================================================
+
+          Path(
+              "data/gemini_top5.json"
+          ).write_text(
+
+              json.dumps(
+                  top5,
+                  ensure_ascii=False,
+                  indent=2
+              ),
+
+              encoding="utf-8"
+
+          )
+
+
+          Path(
+              "data/gemini_status.txt"
+          ).write_text(
+
+              gemini_status,
+
+              encoding="utf-8"
+
+          )
+
+
+          print("=" * 80)
+          print("最终 Top5")
+          print("=" * 80)
+
+
+          print(
+              "状态：",
+              gemini_status
+          )
+
+
+          for item in top5:
+
+              print(
+                  item.get("rank"),
+                  item.get("code"),
+                  item.get("name"),
+                  item.get("score"),
+                  item.get("source"),
+                  item.get("reason")
+              )
+
+          PY
+
+
+      # =========================================================
+      # 10. Send final Top5 to Feishu
+      # =========================================================
+
+      - name: 10. Send final Top5 to Feishu
+        if: success()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+
+          set -e
+
+          python - <<'PY'
+
+          import json
+          import os
+          from pathlib import Path
+
+          import requests
+
+
+          webhook = os.environ.get(
+              "FEISHU_WEBHOOK_URL",
+              ""
+          ).strip()
+
+
+          if not webhook:
+
+              print(
+                  "⚠️ 未配置 FEISHU_WEBHOOK_URL"
+              )
+
+              raise SystemExit(0)
+
+
+          top5 = json.loads(
+
+              Path(
+                  "data/gemini_top5.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+
+          )
+
+
+          candidates = json.loads(
+
+              Path(
+                  "data/final_candidates.json"
+              ).read_text(
+                  encoding="utf-8"
+              )
+
+          )
+
+
+          candidate_map = {
+
+              str(
+                  item.get(
+                      "code",
+                      ""
+                  )
+              ).zfill(6):
+                  item
+
+              for item in candidates
+
+          }
+
+
+          status_file = Path(
+              "data/gemini_status.txt"
+          )
+
+
+          gemini_status = (
+
+              status_file.read_text(
+                  encoding="utf-8"
+              ).strip()
+
+              if status_file.exists()
+
+              else "未知"
+
+          )
+
+
+          lines = []
+
+
+          lines.append(
+              "📊 AlphaSift 每日智能选股"
+          )
+
+
+          lines.append("")
+
+          lines.append(
+              "🧠 六策略 + 技术 + 资金 + Gemini"
+          )
+
+
+          lines.append("")
+
+          lines.append(
+              f"Gemini状态：{gemini_status}"
+          )
+
+
+          lines.append("")
+
+          lines.append(
+              "筛选流程："
+          )
+
+
+          lines.extend([
+
+              "6个AlphaSift策略",
+              "↓",
+              "价格 2～30元",
+              "↓",
+              "MA5 > MA10 > MA20",
+              "↓",
+              "MACD多头",
+              "↓",
+              "个股资金净流入",
+              "↓",
+              "行业资金流",
+              "↓",
+              "概念资金流",
+              "↓",
+              "主题/板块热度",
+              "↓",
+              "量化综合评分",
+              "↓",
+              "Gemini",
+              "↓",
+              "最终Top5"
+
+          ])
+
+
+          lines.append("")
+
+          lines.append(
+              "━━━━━━━━━━━━━━━━"
+          )
+
+
+          for item in top5:
+
+              code = str(
+                  item.get(
+                      "code",
+                      ""
+                  )
+              ).zfill(6)
+
+
+              detail = candidate_map.get(
+                  code,
+                  {}
+              )
+
+
+              name = detail.get(
+                  "name",
+                  item.get(
+                      "name",
+                      "-"
+                  )
+              )
+
+
+              lines.append("")
+
+
+              lines.append(
+
+                  f"🏆 {item.get('rank', '-')}. "
+                  f"{name}（{code}）"
+
+              )
+
+
+              lines.append(
+
+                  f"评分："
+                  f"{item.get('score', '-')}"
+
+              )
+
+
+              lines.append(
+
+                  f"来源："
+                  f"{item.get('source', '-')}"
+
+              )
+
+
+              lines.append(
+
+                  f"价格："
+                  f"{detail.get('price', '-')}"
+
+              )
+
+
+              lines.append(
+
+                  f"策略数："
+                  f"{len(detail.get('strategies', []))}"
+
+              )
+
+
+              lines.append(
+
+                  "策略："
+                  + ", ".join(
+                      detail.get(
+                          "strategies",
+                          []
+                      )
+                  )
+
+              )
+
+
+              lines.append(
+
+                  f"MA："
+                  f"{detail.get('ma5', '-')}"
+                  " > "
+                  f"{detail.get('ma10', '-')}"
+                  " > "
+                  f"{detail.get('ma20', '-')}"
+
+              )
+
+
+              lines.append(
+
+                  f"MACD："
+                  f"{detail.get('macd_status') or detail.get('macd_bullish', '-')}"
+
+              )
+
+
+              lines.append(
+
+                  f"个股净流入："
+                  f"{detail.get('stock_net', '-')}"
+                  "亿元"
+
+              )
+
+
+              lines.append(
+
+                  f"资金强度："
+                  f"{detail.get('stock_strength', '-')}"
+                  "%"
+
+              )
+
+
+              lines.append(
+
+                  f"行业："
+                  f"{detail.get('industry', '-')}"
+
+              )
+
+
+              lines.append(
+
+                  f"行业净流入："
+                  f"{detail.get('industry_net', '-')}"
+                  "亿元"
+
+              )
+
+
+              lines.append(
+
+                  f"主题评分："
+                  f"{detail.get('theme_score', '-')}"
+
+              )
+
+
+              concepts = detail.get(
+                  "concepts",
+                  []
+              )
+
+
+              if concepts:
+
+                  lines.append(
+
+                      "概念："
+                      + ", ".join(
+                          concepts[:5]
+                      )
+
+                  )
+
+
+              if detail.get(
+                  "concept_net"
+              ) is not None:
+
+                  lines.append(
+
+                      f"概念净流入："
+                      f"{detail.get('concept_net')}"
+                      "亿元"
+
+                  )
+
+
+              lines.append(
+
+                  f"AI判断："
+                  f"{item.get('reason', '-')}"
+
+              )
+
+
+              lines.append("")
+
+              lines.append(
+                  "━━━━━━━━━━━━━━━━"
+              )
+
+
+          lines.append("")
+
+          lines.append(
+              "⏰ 自动运行："
+              "北京时间工作日15:30"
+          )
+
+
+          lines.append("")
+
+          lines.append(
+
+              "⚠️ 本结果为程序化量化筛选及AI排序，"
+              "不构成投资建议。"
+
+          )
+
+
+          message = "\n".join(
+              lines
+          )
+
+
+          print(
+              "========== 飞书最终消息 =========="
+          )
+
+
+          print(message)
+
+
+          print(
+              "=================================="
+          )
+
+
+          payload = {
+
+              "msg_type":
+                  "text",
+
+              "content": {
+
+                  "text":
+                      message
+
+              }
+
+          }
+
+
+          response = requests.post(
+
+              webhook,
+
+              json=payload,
+
+              timeout=20
+
+          )
+
+
+          print(
+              "Feishu HTTP:",
+              response.status_code
+          )
+
+
+          print(
+              "Feishu response:",
+              response.text
+          )
+
+
+          response.raise_for_status()
+
+
+          try:
+
+              result = response.json()
+
+
+              if result.get(
+                  "code"
+              ) not in (
+                  None,
+                  0
+              ):
+
+                  raise RuntimeError(
+                      "飞书返回错误："
+                      + str(result)
+                  )
+
+
+          except ValueError:
+
+              pass
+
+
+          print(
+              "✅ 最终 Top5 已发送到飞书"
+          )
+
+          PY
+
+
+      # =========================================================
+      # 11. Upload final results
+      # =========================================================
+
+      - name: 11. Upload final results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alphasift-final-results
+          path: |
+            data/industry_map.csv
+            data/stock_flow.csv
+            data/industry_flow.csv
+            data/concept_flow.csv
+            data/final_candidates.csv
+            data/final_candidates.json
+            data/gemini_top5.json
+            data/gemini_status.txt
+            data/runs_before.json
+            data/runs/*.json
+          if-no-files-found: ignore
+          retention-days: 14
