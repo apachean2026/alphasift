@@ -42,22 +42,63 @@ jobs:
           alphasift strategies --explain
 
       - name: 9. Build industry cache
+        shell: bash
         run: |
           mkdir -p data
-          alphasift industry-cache \
-            --output data/industry_map.csv \
-            --explain
+
+          echo "开始生成 AlphaSift 行业缓存..."
+
+          for i in 1 2 3; do
+            echo "========================================"
+            echo "第 ${i}/3 次尝试"
+            echo "========================================"
+
+            rm -f data/industry_map.csv
+            rm -f data/industry_map.csv.meta.json
+            rm -f data/industry_map.csv.history.jsonl
+
+            if alphasift industry-cache \
+              --output data/industry_map.csv \
+              --explain; then
+
+              if [ -s data/industry_map.csv ] && [ "$(wc -c < data/industry_map.csv)" -gt 10 ]; then
+                echo "行业缓存生成成功"
+                break
+              fi
+            fi
+
+            echo "本次行业缓存生成失败，等待 20 秒后重试..."
+            sleep 20
+          done
+
+          if [ ! -s data/industry_map.csv ] || [ "$(wc -c < data/industry_map.csv)" -le 10 ]; then
+            echo "行业缓存最终生成失败"
+            exit 1
+          fi
+
+          echo "行业缓存文件大小："
+          ls -lh data/industry_map.csv
 
       - name: 10. Check industry cache
         run: |
-          ls -lh data/industry_map.csv
           python - <<'PY'
           import pandas as pd
 
           path = "data/industry_map.csv"
+
           df = pd.read_csv(path)
 
-          print("industry_map.csv 行数:", len(df))
-          print("industry_map.csv 列:", list(df.columns))
+          print("========================================")
+          print("industry_map.csv 检查结果")
+          print("========================================")
+          print("行数:", len(df))
+          print("列:", list(df.columns))
+          print()
           print(df.head(10).to_string(index=False))
+
+          if len(df) == 0:
+              raise RuntimeError("industry_map.csv 没有任何数据")
+
+          print()
+          print("行业缓存检查通过")
           PY
