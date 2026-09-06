@@ -1,10 +1,10 @@
-name: 测试同花顺行业与概念资金流
+name: 测试资金流三合一关联
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-ths-flow:
+  test-fund-flow-combine:
 
     runs-on: ubuntu-latest
 
@@ -25,7 +25,7 @@ jobs:
           python-version: "3.11"
 
       # =========================================================
-      # 3. 安装 AKShare
+      # 3. 安装依赖
       # =========================================================
       - name: Install AKShare
         run: |
@@ -33,231 +33,387 @@ jobs:
           pip install --upgrade akshare pandas
 
       # =========================================================
-      # 4. 测试同花顺行业资金流
+      # 4. 三合一资金流测试
       # =========================================================
-      - name: Test THS Industry Fund Flow
+      - name: Test Combined Fund Flow
         shell: bash
         run: |
           python - <<'PY'
+
           import akshare as ak
           import pandas as pd
           import traceback
+          import time
 
-          print("=" * 80)
-          print("【1】测试同花顺行业资金流")
-          print("=" * 80)
+          print("=" * 100)
+          print("资金流三合一关联测试")
+          print("=" * 100)
+
+          # =====================================================
+          # 测试股票
+          # =====================================================
+          stocks = [
+              {
+                  "code": "600150",
+                  "name": "中国船舶"
+              },
+              {
+                  "code": "300308",
+                  "name": "中际旭创"
+              },
+              {
+                  "code": "600519",
+                  "name": "贵州茅台"
+              },
+              {
+                  "code": "300750",
+                  "name": "宁德时代"
+              },
+          ]
+
+          # =====================================================
+          # 1. 获取个股资金流
+          # =====================================================
+          print("")
+          print("=" * 100)
+          print("【1】获取同花顺个股资金流")
+          print("=" * 100)
 
           try:
 
-              if not hasattr(ak, "stock_fund_flow_industry"):
-                  raise RuntimeError(
-                      "当前 AKShare 不存在 stock_fund_flow_industry"
-                  )
+              stock_flow = ak.stock_fund_flow_individual(
+                  symbol="即时"
+              )
 
-              print("AKShare 接口存在：stock_fund_flow_industry")
+              if stock_flow is None or stock_flow.empty:
+                  raise RuntimeError("个股资金流返回空数据")
 
-              attempts = [
-                  {"symbol": "即时"},
-                  {"symbol": "3日排行"},
-                  {"symbol": "5日排行"},
-                  {"symbol": "10日排行"},
-                  {"symbol": "20日排行"},
-              ]
+              print("✅ 个股资金流获取成功")
+              print("股票数量：", len(stock_flow))
+              print("字段：")
+              print(list(stock_flow.columns))
 
-              success = False
-
-              for kwargs in attempts:
-
-                  print("")
-                  print("尝试参数：", kwargs)
-
-                  try:
-
-                      df = ak.stock_fund_flow_industry(**kwargs)
-
-                      if df is not None and not df.empty:
-
-                          print("")
-                          print("✅ 调用成功")
-                          print("参数：", kwargs)
-                          print("数据行数：", len(df))
-
-                          print("")
-                          print("字段：")
-                          print(list(df.columns))
-
-                          print("")
-                          print("前 20 行：")
-                          print(
-                              df.head(20).to_string(index=False)
-                          )
-
-                          filename = (
-                              "ths_industry_fund_flow_"
-                              + kwargs["symbol"]
-                              + ".csv"
-                          )
-
-                          df.to_csv(
-                              filename,
-                              index=False,
-                              encoding="utf-8-sig"
-                          )
-
-                          print("")
-                          print("已保存：", filename)
-
-                          success = True
-                          break
-
-                      else:
-
-                          print("⚠️ 返回空数据")
-
-                  except Exception as e:
-
-                      print(
-                          "❌ 调用失败：",
-                          type(e).__name__,
-                          repr(e)
-                      )
-
-              if not success:
-
-                  print("")
-                  print("❌ 同花顺行业资金流所有测试均失败")
+              stock_flow.to_csv(
+                  "stock_fund_flow.csv",
+                  index=False,
+                  encoding="utf-8-sig"
+              )
 
           except Exception as e:
 
               print(
-                  "❌ 行业资金流测试异常：",
+                  "❌ 个股资金流失败：",
                   type(e).__name__,
                   repr(e)
               )
 
               traceback.print_exc()
+              raise
 
+          # =====================================================
+          # 2. 获取行业资金流
+          # =====================================================
           print("")
-          print("=" * 80)
-          PY
-
-      # =========================================================
-      # 5. 测试同花顺概念资金流
-      # =========================================================
-      - name: Test THS Concept Fund Flow
-        shell: bash
-        run: |
-          python - <<'PY'
-          import akshare as ak
-          import pandas as pd
-          import traceback
-
-          print("=" * 80)
-          print("【2】测试同花顺概念资金流")
-          print("=" * 80)
+          print("=" * 100)
+          print("【2】获取同花顺行业资金流")
+          print("=" * 100)
 
           try:
 
-              if not hasattr(ak, "stock_fund_flow_concept"):
-                  raise RuntimeError(
-                      "当前 AKShare 不存在 stock_fund_flow_concept"
-                  )
+              industry_flow = ak.stock_fund_flow_industry(
+                  symbol="即时"
+              )
 
-              print("AKShare 接口存在：stock_fund_flow_concept")
+              if industry_flow is None or industry_flow.empty:
+                  raise RuntimeError("行业资金流返回空数据")
 
-              attempts = [
-                  {"symbol": "即时"},
-                  {"symbol": "3日排行"},
-                  {"symbol": "5日排行"},
-                  {"symbol": "10日排行"},
-                  {"symbol": "20日排行"},
-              ]
+              print("✅ 行业资金流获取成功")
+              print("行业数量：", len(industry_flow))
+              print("字段：")
+              print(list(industry_flow.columns))
 
-              success = False
-
-              for kwargs in attempts:
-
-                  print("")
-                  print("尝试参数：", kwargs)
-
-                  try:
-
-                      df = ak.stock_fund_flow_concept(**kwargs)
-
-                      if df is not None and not df.empty:
-
-                          print("")
-                          print("✅ 调用成功")
-                          print("参数：", kwargs)
-                          print("数据行数：", len(df))
-
-                          print("")
-                          print("字段：")
-                          print(list(df.columns))
-
-                          print("")
-                          print("前 20 行：")
-                          print(
-                              df.head(20).to_string(index=False)
-                          )
-
-                          filename = (
-                              "ths_concept_fund_flow_"
-                              + kwargs["symbol"]
-                              + ".csv"
-                          )
-
-                          df.to_csv(
-                              filename,
-                              index=False,
-                              encoding="utf-8-sig"
-                          )
-
-                          print("")
-                          print("已保存：", filename)
-
-                          success = True
-                          break
-
-                      else:
-
-                          print("⚠️ 返回空数据")
-
-                  except Exception as e:
-
-                      print(
-                          "❌ 调用失败：",
-                          type(e).__name__,
-                          repr(e)
-                      )
-
-              if not success:
-
-                  print("")
-                  print("❌ 同花顺概念资金流所有测试均失败")
+              industry_flow.to_csv(
+                  "industry_fund_flow.csv",
+                  index=False,
+                  encoding="utf-8-sig"
+              )
 
           except Exception as e:
 
               print(
-                  "❌ 概念资金流测试异常：",
+                  "❌ 行业资金流失败：",
                   type(e).__name__,
                   repr(e)
               )
 
               traceback.print_exc()
+              raise
+
+          # =====================================================
+          # 3. 获取概念资金流
+          # =====================================================
+          print("")
+          print("=" * 100)
+          print("【3】获取同花顺概念资金流")
+          print("=" * 100)
+
+          try:
+
+              concept_flow = ak.stock_fund_flow_concept(
+                  symbol="即时"
+              )
+
+              if concept_flow is None or concept_flow.empty:
+                  raise RuntimeError("概念资金流返回空数据")
+
+              print("✅ 概念资金流获取成功")
+              print("概念数量：", len(concept_flow))
+              print("字段：")
+              print(list(concept_flow.columns))
+
+              concept_flow.to_csv(
+                  "concept_fund_flow.csv",
+                  index=False,
+                  encoding="utf-8-sig"
+              )
+
+          except Exception as e:
+
+              print(
+                  "❌ 概念资金流失败：",
+                  type(e).__name__,
+                  repr(e)
+              )
+
+              traceback.print_exc()
+              raise
+
+          # =====================================================
+          # 4. 检查个股资金流
+          # =====================================================
+          print("")
+          print("=" * 100)
+          print("【4】四只测试股票资金流")
+          print("=" * 100)
 
           print("")
-          print("=" * 80)
+
+          results = []
+
+          for stock in stocks:
+
+              code = stock["code"]
+              name = stock["name"]
+
+              print("-" * 100)
+              print(f"股票：{name}（{code}）")
+
+              try:
+
+                  row = stock_flow[
+                      stock_flow["股票代码"].astype(str).str.zfill(6)
+                      == code
+                  ]
+
+                  if row.empty:
+                      print("⚠️ 没有找到该股票")
+                      continue
+
+                  row = row.iloc[0]
+
+                  inflow = pd.to_numeric(
+                      row.get("流入资金"),
+                      errors="coerce"
+                  )
+
+                  outflow = pd.to_numeric(
+                      row.get("流出资金"),
+                      errors="coerce"
+                  )
+
+                  net = pd.to_numeric(
+                      row.get("净额"),
+                      errors="coerce"
+                  )
+
+                  turnover = pd.to_numeric(
+                      row.get("成交额"),
+                      errors="coerce"
+                  )
+
+                  ratio = None
+
+                  if (
+                      pd.notna(net)
+                      and pd.notna(turnover)
+                      and turnover != 0
+                  ):
+                      ratio = net / turnover * 100
+
+                  print("股票名称：", row.get("股票简称"))
+                  print("最新价：", row.get("最新价"))
+                  print("涨跌幅：", row.get("涨跌幅"))
+                  print("流入资金：", inflow)
+                  print("流出资金：", outflow)
+                  print("净额：", net)
+                  print("成交额：", turnover)
+
+                  if ratio is not None:
+                      print(
+                          "净额/成交额：",
+                          round(ratio, 2),
+                          "%"
+                      )
+
+                  results.append({
+                      "代码": code,
+                      "名称": name,
+                      "最新价": row.get("最新价"),
+                      "涨跌幅": row.get("涨跌幅"),
+                      "个股流入": inflow,
+                      "个股流出": outflow,
+                      "个股净额": net,
+                      "个股成交额": turnover,
+                      "个股资金强度": ratio,
+                  })
+
+              except Exception as e:
+
+                  print(
+                      "❌ 股票资金解析失败：",
+                      type(e).__name__,
+                      repr(e)
+                  )
+
+              time.sleep(0.5)
+
+          # =====================================================
+          # 5. 对行业资金流进行排序
+          # =====================================================
+          print("")
+          print("=" * 100)
+          print("【5】行业资金流排名")
+          print("=" * 100)
+
+          try:
+
+              industry_flow["净额_num"] = pd.to_numeric(
+                  industry_flow["净额"],
+                  errors="coerce"
+              )
+
+              industry_top = industry_flow.sort_values(
+                  "净额_num",
+                  ascending=False
+              ).head(20)
+
+              print(
+                  industry_top[
+                      [
+                          "行业",
+                          "行业-涨跌幅",
+                          "流入资金",
+                          "流出资金",
+                          "净额",
+                          "公司家数"
+                      ]
+                  ].to_string(index=False)
+              )
+
+          except Exception as e:
+
+              print(
+                  "⚠️ 行业排序失败：",
+                  type(e).__name__,
+                  repr(e)
+              )
+
+          # =====================================================
+          # 6. 概念资金流排名
+          # =====================================================
+          print("")
+          print("=" * 100)
+          print("【6】概念资金流排名")
+          print("=" * 100)
+
+          try:
+
+              concept_flow["净额_num"] = pd.to_numeric(
+                  concept_flow["净额"],
+                  errors="coerce"
+              )
+
+              concept_top = concept_flow.sort_values(
+                  "净额_num",
+                  ascending=False
+              ).head(20)
+
+              print(
+                  concept_top[
+                      [
+                          "行业",
+                          "行业-涨跌幅",
+                          "流入资金",
+                          "流出资金",
+                          "净额",
+                          "公司家数",
+                          "领涨股"
+                      ]
+                  ].to_string(index=False)
+              )
+
+          except Exception as e:
+
+              print(
+                  "⚠️ 概念排序失败：",
+                  type(e).__name__,
+                  repr(e)
+              )
+
+          # =====================================================
+          # 7. 最终汇总
+          # =====================================================
+          print("")
+          print("=" * 100)
+          print("【7】资金流三合一测试汇总")
+          print("=" * 100)
+
+          if results:
+
+              result_df = pd.DataFrame(results)
+
+              result_df.to_csv(
+                  "combined_stock_fund_flow.csv",
+                  index=False,
+                  encoding="utf-8-sig"
+              )
+
+              print("")
+              print(
+                  result_df.to_string(index=False)
+              )
+
+          print("")
+          print("=" * 100)
+          print("测试完成")
+          print("=" * 100)
+
+          print("")
+          print("注意：")
+          print("本次测试只验证资金流数据能否获取。")
+          print("暂未强行把股票与行业/概念进行归属匹配。")
+          print("正式接入 AlphaSift 前还需要解决行业/概念归属映射。")
+
           PY
 
       # =========================================================
-      # 6. 上传测试结果
+      # 5. 上传全部测试结果
       # =========================================================
-      - name: Upload fund flow results
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ths-fund-flow-test-results
+          name: combined-fund-flow-test
           path: |
             *.csv
           if-no-files-found: ignore
