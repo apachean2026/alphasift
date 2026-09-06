@@ -44,3 +44,7 @@ jobs:
       - name: 9. Run dual_low screening
         run: |
           alphasift screen dual_low --explain --no-llm --save-run
+
+      - name: 10. Evaluate saved run
+        run: |
+          alphasift evaluate 1dc458905595 --explain
