@@ -1,14 +1,19 @@
-name: AlphaSift 官方部署测试
+name: AlphaSift 每日选股
 
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "30 7 * * 1-5"
+
 jobs:
   alphasift:
+
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout AlphaSift
+
+      - name: 1. Checkout
         uses: actions/checkout@v4
 
       - name: 2. Setup Python
@@ -18,42 +23,16 @@ jobs:
 
       - name: 3. Install AlphaSift
         run: |
-          python -m pip install --upgrade pip
           pip install -e .
 
-      - name: 4. Check AlphaSift
-        run: |
-          alphasift --help
-
-      - name: 5. List strategies
+      - name: 4. List strategies
         run: |
           alphasift strategies
 
-      - name: 6. Check AlphaSift overview
+      - name: 5. Quickstart
         run: |
-          alphasift overview --explain
+          alphasift quickstart
 
-      - name: 7. Check data sources
+      - name: 6. Daily screening
         run: |
-          alphasift doctor data-sources
-
-      - name: 8. List strategies
-        run: |
-          alphasift strategies --explain
-
-      - name: 9. Run dual_low screening
-        id: screening
-        run: |
-          alphasift screen dual_low --explain --no-llm --save-run | tee screen_output.txt
-          RUN_ID=$(grep -oE 'run_id=[a-zA-Z0-9]+' screen_output.txt | head -1 | cut -d= -f2)
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "本次 Run ID: $RUN_ID"
-          
-      - name: 10. Check installed CLI
-        run: |
-          python -c "import alphasift.cli; print(alphasift.cli.__file__)"
-          grep -n "failure-samples" alphasift/cli.py
-
-      - name: 11. Evaluate saved run
-        run: |
-          alphasift evaluate "${{ steps.screening.outputs.run_id }}" --explain
+          alphasift screen dual_low --no-llm --save-run
