@@ -64,18 +64,13 @@ jobs:
           run_dir = Path("data/runs")
 
           if not run_dir.exists():
-              raise SystemExit(
-                  "错误：data/runs 目录不存在"
-              )
+              raise SystemExit("错误：data/runs 目录不存在")
 
           files = list(run_dir.glob("*.json"))
 
           if not files:
-              raise SystemExit(
-                  "错误：没有找到 AlphaSift run JSON"
-              )
+              raise SystemExit("错误：没有找到 AlphaSift run JSON")
 
-          # 找最新生成的 run
           latest = max(
               files,
               key=lambda p: p.stat().st_mtime
@@ -84,7 +79,6 @@ jobs:
           print("最新 run 文件：")
           print(latest)
 
-          # 检查 JSON 是否正常
           with latest.open(
               "r",
               encoding="utf-8"
@@ -103,13 +97,9 @@ jobs:
 
           print(
               "Snapshot source：",
-              data.get(
-                  "snapshot_source",
-                  "unknown"
-              )
+              data.get("snapshot_source", "unknown")
           )
 
-          # 保存给下一步使用
           with open(
               os.environ["GITHUB_ENV"],
               "a",
@@ -126,50 +116,40 @@ jobs:
           PY
 
       # =========================================================
-      # 7. Extract Top 5 and send to Feishu
+      # 7. Send Top 5 to Feishu
       # =========================================================
       - name: 7. Send Top 5 to Feishu
         if: success()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+
         run: |
           python - <<'PY'
           import json
           import os
           import requests
 
-          # =====================================================
-          # 读取飞书 Webhook
-          # =====================================================
           webhook = os.environ.get(
               "FEISHU_WEBHOOK_URL"
           )
 
           if not webhook:
               print(
-                  "警告：没有配置 "
-                  "FEISHU_WEBHOOK_URL"
+                  "没有配置 FEISHU_WEBHOOK_URL，"
+                  "跳过飞书通知"
               )
-              print("跳过飞书通知")
               raise SystemExit(0)
 
-          # =====================================================
-          # 读取最新 AlphaSift run
-          # =====================================================
           run_file = os.environ.get(
               "ALPHASIFT_RUN_FILE"
           )
 
           if not run_file:
               raise SystemExit(
-                  "错误：没有找到 "
-                  "ALPHASIFT_RUN_FILE"
+                  "错误：没有找到 ALPHASIFT_RUN_FILE"
               )
 
-          print(
-              "读取 run：",
-              run_file
-          )
+          print("读取 run：", run_file)
 
           with open(
               run_file,
@@ -177,6 +157,167 @@ jobs:
               encoding="utf-8"
           ) as f:
               data = json.load(f)
+
+          print(
+              "Run ID：",
+              data.get("run_id", "unknown")
+          )
+
+          print(
+              "Strategy：",
+              data.get("strategy", "unknown")
+          )
+
+          # =====================================================
+          # 查找股票列表
+          # =====================================================
+          candidates = None
+
+          possible_fields = [
+              "picks",
+              "candidates",
+              "results",
+              "ranked_candidates",
+              "selected_stocks",
+              "stocks",
+              "items",
+              "top_picks",
+              "ranked"
+          ]
+
+          # 顶层寻找
+          for field in possible_fields:
+
+              value = data.get(field)
+
+              if isinstance(value, list) and value:
+
+                  candidates = value
+
+                  print(
+                      "找到股票列表：",
+                      field
+                  )
+
+                  break
+
+          # 嵌套寻找
+          if candidates is None:
+
+              for parent_name in [
+                  "result",
+                  "screen_result",
+                  "screen",
+                  "selection",
+                  "portfolio",
+                  "data"
+              ]:
+
+                  parent = data.get(parent_name)
+
+                  if not isinstance(parent, dict):
+                      continue
+
+                  for field in possible_fields:
+
+                      value = parent.get(field)
+
+                      if isinstance(value, list) and value:
+
+                          candidates = value
+
+                          print(
+                              "找到股票列表：",
+                              parent_name,
+                              field
+                          )
+
+                          break
+
+                  if candidates is not None:
+                      break
+
+          # =====================================================
+          # 找不到股票时，把 JSON 结构打印出来
+          # =====================================================
+          if candidates is None:
+
+              print("")
+              print(
+                  "没有找到股票列表。"
+              )
+
+              print("")
+              print(
+                  "Run JSON 顶层字段："
+              )
+
+              print(
+                  list(data.keys())
+              )
+
+              print("")
+              print(
+                  "Run JSON 内容："
+              )
+
+              print(
+                  json.dumps(
+                      data,
+                      ensure_ascii=False,
+                      indent=2
+                  )
+              )
+
+              raise SystemExit(
+                  "无法从 run JSON 找到股票列表"
+              )
+
+          # =====================================================
+          # 排序
+          # =====================================================
+          def get_rank(stock):
+
+              if not isinstance(stock, dict):
+                  return 999999
+
+              value = stock.get("rank")
+
+              if value is None:
+                  value = stock.get("ranking")
+
+              if value is None:
+                  value = stock.get("position")
+
+              try:
+                  return int(value)
+              except Exception:
+                  return 999999
+
+          candidates = sorted(
+              candidates,
+              key=get_rank
+          )
+
+          top5 = candidates[:5]
+
+          if not top5:
+              raise SystemExit(
+                  "没有找到 Top 5"
+              )
+
+          # =====================================================
+          # 格式化数字
+          # =====================================================
+          def number(value, digits=2):
+
+              if value is None:
+                  return "-"
+
+              try:
+                  return f"{float(value):.{digits}f}"
+              except Exception:
+                  return str(value)
 
           # =====================================================
           # 基本信息
@@ -191,7 +332,7 @@ jobs:
               "dual_low"
           )
 
-          snapshot_source = data.get(
+          source = data.get(
               "snapshot_source",
               "unknown"
           )
@@ -207,236 +348,7 @@ jobs:
           )
 
           # =====================================================
-          # 查找候选股票
-          #
-          # AlphaSift saved run 会保存候选及评分信息。
-          # 这里兼容多个可能的字段位置。
-          # =====================================================
-          candidates = None
-
-          possible_fields = [
-              "picks",
-              "candidates",
-              "results",
-              "ranked_candidates",
-              "selected_stocks",
-              "stocks",
-              "items",
-              "top_picks",
-              "ranked",
-              "output",
-          ]
-
-          # -----------------------------------------------------
-          # 第一层：顶层字段
-          # -----------------------------------------------------
-          for field in possible_fields:
-
-              value = data.get(field)
-
-              if (
-                  isinstance(value, list)
-                  and value
-              ):
-                  candidates = value
-
-                  print(
-                      "找到股票列表字段：",
-                      field
-                  )
-
-                  break
-
-          # -----------------------------------------------------
-          # 第二层：常见嵌套字段
-          # -----------------------------------------------------
-          if candidates is None:
-
-              nested_fields = [
-                  "screen_result",
-                  "screen",
-                  "result",
-                  "selection",
-                  "portfolio",
-                  "data",
-                  "payload",
-              ]
-
-              for parent_field in nested_fields:
-
-                  parent = data.get(
-                      parent_field
-                  )
-
-                  if not isinstance(
-                      parent,
-                      dict
-                  ):
-                      continue
-
-                  for field in possible_fields:
-
-                      value = parent.get(
-                          field
-                      )
-
-                      if (
-                          isinstance(value, list)
-                          and value
-                      ):
-                          candidates = value
-
-                          print(
-                              "找到嵌套股票列表：",
-                              f"{parent_field}.{field}"
-                          )
-
-                          break
-
-                  if candidates is not None:
-                      break
-
-          # =====================================================
-          # 如果没有直接找到列表，尝试扫描 JSON
-          # 中的列表字段
-          # =====================================================
-          if candidates is None:
-
-              for key, value in data.items():
-
-                  if not isinstance(
-                      value,
-                      list
-                  ):
-                      continue
-
-                  if not value:
-                      continue
-
-                  # 判断列表是否像股票列表
-                  first = value[0]
-
-                  if not isinstance(
-                      first,
-                      dict
-                  ):
-                      continue
-
-                  stock_keys = {
-                      "code",
-                      "symbol",
-                      "stock_code",
-                      "name",
-                      "stock_name",
-                      "final_score",
-                      "screen_score",
-                      "price",
-                  }
-
-                  if stock_keys.intersection(
-                      first.keys()
-                  ):
-
-                      candidates = value
-
-                      print(
-                          "自动识别股票列表字段：",
-                          key
-                      )
-
-                      break
-
-          # =====================================================
-          # 找不到股票列表
-          # =====================================================
-          if candidates is None:
-
-              print(
-                  "错误：没有在 run JSON 中找到股票列表。"
-              )
-
-              print("")
-              print(
-                  "Run JSON 顶层字段："
-              )
-
-              print(
-                  list(data.keys())
-              )
-
-              print("")
-              print(
-                  "Run JSON 前 20000 字符："
-              )
-
-              print(
-                  json.dumps(
-                      data,
-                      ensure_ascii=False,
-                      indent=2
-                  )[:20000]
-              )
-
-              raise SystemExit(1)
-
-          # =====================================================
-          # 排序
-          # =====================================================
-          def rank_value(stock):
-
-              if not isinstance(
-                  stock,
-                  dict
-              ):
-                  return 999999
-
-              value = (
-                  stock.get("rank")
-                  or stock.get("ranking")
-                  or stock.get("position")
-              )
-
-              try:
-                  return int(value)
-              except Exception:
-                  return 999999
-
-          candidates = sorted(
-              candidates,
-              key=rank_value
-          )
-
-          # =====================================================
-          # 只取 Top 5
-          # =====================================================
-          top5 = candidates[:5]
-
-          if not top5:
-              raise SystemExit(
-                  "错误：没有找到 Top 5 股票"
-              )
-
-          # =====================================================
-          # 数字格式化
-          # =====================================================
-          def fmt(
-              value,
-              digits=2
-          ):
-
-              if value is None:
-                  return "-"
-
-              try:
-                  return (
-                      f"{float(value):."
-                      f"{digits}f}"
-                  )
-              except Exception:
-                  return str(value)
-
-          # =====================================================
-          # 构造飞书消息
+          # 创建飞书消息
           # =====================================================
           lines = []
 
@@ -447,24 +359,22 @@ jobs:
           lines.append("")
 
           lines.append(
-              f"策略：{strategy}（双低选股）"
+              "策略："
+              + str(strategy)
+              + "（双低选股）"
           )
 
           lines.append(
-              f"数据源：{snapshot_source}"
+              "数据源："
+              + str(source)
           )
 
-          lines.append(
-              "LLM："
-              + (
-                  "已启用"
-                  if llm_ranked
-                  else "未启用"
-              )
-          )
+          if llm_ranked:
+              lines.append("LLM：已启用")
+          else:
+              lines.append("LLM：未启用")
 
           if post_analyzers:
-
               lines.append(
                   "后置分析："
                   + ", ".join(
@@ -474,7 +384,8 @@ jobs:
               )
 
           lines.append(
-              f"Run ID：{run_id}"
+              "Run ID："
+              + str(run_id)
           )
 
           lines.append("")
@@ -486,17 +397,14 @@ jobs:
           lines.append("")
 
           # =====================================================
-          # 输出 Top 5
+          # Top 5
           # =====================================================
           for index, stock in enumerate(
               top5,
               start=1
           ):
 
-              if not isinstance(
-                  stock,
-                  dict
-              ):
+              if not isinstance(stock, dict):
                   continue
 
               code = (
@@ -512,54 +420,54 @@ jobs:
                   or "-"
               )
 
-              final_score = (
-                  stock.get("final_score")
-                  if stock.get(
-                      "final_score"
-                  ) is not None
-                  else stock.get("score")
+              final_score = stock.get(
+                  "final_score"
               )
+
+              if final_score is None:
+                  final_score = stock.get(
+                      "score"
+                  )
 
               screen_score = stock.get(
                   "screen_score"
               )
 
-              price = (
-                  stock.get("price")
-                  if stock.get("price")
-                  is not None
-                  else stock.get("close")
+              price = stock.get(
+                  "price"
               )
 
               if price is None:
-
                   price = stock.get(
-                      "latest_price"
+                      "close"
                   )
 
-              change_pct = (
-                  stock.get("change_pct")
-                  if stock.get(
-                      "change_pct"
-                  ) is not None
-                  else stock.get("change")
+              change_pct = stock.get(
+                  "change_pct"
               )
 
-              pe = (
-                  stock.get("pe_ratio")
-                  if stock.get(
-                      "pe_ratio"
-                  ) is not None
-                  else stock.get("pe")
+              if change_pct is None:
+                  change_pct = stock.get(
+                      "change"
+                  )
+
+              pe = stock.get(
+                  "pe_ratio"
               )
 
-              pb = (
-                  stock.get("pb_ratio")
-                  if stock.get(
-                      "pb_ratio"
-                  ) is not None
-                  else stock.get("pb")
+              if pe is None:
+                  pe = stock.get(
+                      "pe"
+                  )
+
+              pb = stock.get(
+                  "pb_ratio"
               )
+
+              if pb is None:
+                  pb = stock.get(
+                      "pb"
+                  )
 
               risk = (
                   stock.get("risk_level")
@@ -568,23 +476,26 @@ jobs:
               )
 
               lines.append(
-                  f"{index}️⃣ "
-                  f"{name}（{code}）"
+                  str(index)
+                  + "️⃣ "
+                  + str(name)
+                  + "（"
+                  + str(code)
+                  + "）"
               )
 
               lines.append(
                   "   ⭐ 最终评分："
-                  + fmt(
+                  + number(
                       final_score,
                       1
                   )
               )
 
               if screen_score is not None:
-
                   lines.append(
                       "   筛选评分："
-                      + fmt(
+                      + number(
                           screen_score,
                           1
                       )
@@ -592,7 +503,7 @@ jobs:
 
               lines.append(
                   "   💰 价格："
-                  + fmt(
+                  + number(
                       price,
                       2
                   )
@@ -600,7 +511,7 @@ jobs:
 
               lines.append(
                   "   📈 涨跌幅："
-                  + fmt(
+                  + number(
                       change_pct,
                       2
                   )
@@ -609,7 +520,7 @@ jobs:
 
               lines.append(
                   "   PE："
-                  + fmt(
+                  + number(
                       pe,
                       2
                   )
@@ -617,14 +528,15 @@ jobs:
 
               lines.append(
                   "   PB："
-                  + fmt(
+                  + number(
                       pb,
                       2
                   )
               )
 
               lines.append(
-                  f"   风险：{risk}"
+                  "   风险："
+                  + str(risk)
               )
 
               lines.append("")
@@ -642,22 +554,21 @@ jobs:
               "不构成投资建议。"
           )
 
-          message = "\n".join(
-              lines
-          )
+          message = "\n".join(lines)
 
           # =====================================================
-          # Actions 日志输出
+          # 打印最终飞书内容
           # =====================================================
           print("")
           print(
               "========== 飞书消息 =========="
           )
+
           print(message)
+
           print(
               "=============================="
           )
-          print("")
 
           # =====================================================
           # 发送飞书
@@ -694,17 +605,13 @@ jobs:
 
               result = response.json()
 
-              code = result.get(
-                  "code"
-              )
-
-              if code not in (
+              if result.get("code") not in (
                   None,
                   0
               ):
 
                   raise RuntimeError(
-                      "飞书 API 返回错误："
+                      "飞书返回错误："
                       + str(result)
                   )
 
