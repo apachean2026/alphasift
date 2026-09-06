@@ -43,4 +43,4 @@ jobs:
 
       - name: 9. Run dual_low screening
         run: |
-          alphasift screen dual_low --explain --no-llm
+          alphasift screen dual_low --explain --no-llm --save-run
