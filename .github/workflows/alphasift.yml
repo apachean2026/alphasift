@@ -1,419 +1,248 @@
-name: 测试资金流三合一关联
+name: 测试股票代码匹配
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-fund-flow-combine:
+  test-code-match:
 
     runs-on: ubuntu-latest
 
     steps:
 
-      # =========================================================
-      # 1. Checkout
-      # =========================================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # =========================================================
-      # 2. Python
-      # =========================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # =========================================================
-      # 3. 安装依赖
-      # =========================================================
       - name: Install AKShare
         run: |
           python -m pip install --upgrade pip
           pip install --upgrade akshare pandas
 
-      # =========================================================
-      # 4. 三合一资金流测试
-      # =========================================================
-      - name: Test Combined Fund Flow
+      - name: Diagnose Stock Code
         shell: bash
         run: |
           python - <<'PY'
 
           import akshare as ak
           import pandas as pd
-          import traceback
-          import time
 
           print("=" * 100)
-          print("资金流三合一关联测试")
+          print("股票代码匹配诊断")
           print("=" * 100)
 
           # =====================================================
-          # 测试股票
+          # 获取个股资金流
           # =====================================================
-          stocks = [
-              {
-                  "code": "600150",
-                  "name": "中国船舶"
-              },
-              {
-                  "code": "300308",
-                  "name": "中际旭创"
-              },
-              {
-                  "code": "600519",
-                  "name": "贵州茅台"
-              },
-              {
-                  "code": "300750",
-                  "name": "宁德时代"
-              },
+
+          print("")
+          print("【1】获取个股资金流")
+
+          df = ak.stock_fund_flow_individual(
+              symbol="即时"
+          )
+
+          print("数据行数：", len(df))
+          print("字段：", list(df.columns))
+
+          # =====================================================
+          # 查看真实股票代码
+          # =====================================================
+
+          print("")
+          print("=" * 100)
+          print("【2】查看实际股票代码格式")
+          print("=" * 100)
+
+          print("股票代码字段类型：")
+          print(df["股票代码"].dtype)
+
+          print("")
+          print("前 30 个股票代码：")
+
+          print(
+              df["股票代码"]
+              .head(30)
+              .tolist()
+          )
+
+          # =====================================================
+          # 指定股票
+          # =====================================================
+
+          targets = [
+              "600150",
+              "300308",
+              "600519",
+              "300750",
           ]
 
-          # =====================================================
-          # 1. 获取个股资金流
-          # =====================================================
           print("")
           print("=" * 100)
-          print("【1】获取同花顺个股资金流")
+          print("【3】直接搜索指定股票")
           print("=" * 100)
 
-          try:
+          for code in targets:
 
-              stock_flow = ak.stock_fund_flow_individual(
-                  symbol="即时"
-              )
-
-              if stock_flow is None or stock_flow.empty:
-                  raise RuntimeError("个股资金流返回空数据")
-
-              print("✅ 个股资金流获取成功")
-              print("股票数量：", len(stock_flow))
-              print("字段：")
-              print(list(stock_flow.columns))
-
-              stock_flow.to_csv(
-                  "stock_fund_flow.csv",
-                  index=False,
-                  encoding="utf-8-sig"
-              )
-
-          except Exception as e:
-
-              print(
-                  "❌ 个股资金流失败：",
-                  type(e).__name__,
-                  repr(e)
-              )
-
-              traceback.print_exc()
-              raise
-
-          # =====================================================
-          # 2. 获取行业资金流
-          # =====================================================
-          print("")
-          print("=" * 100)
-          print("【2】获取同花顺行业资金流")
-          print("=" * 100)
-
-          try:
-
-              industry_flow = ak.stock_fund_flow_industry(
-                  symbol="即时"
-              )
-
-              if industry_flow is None or industry_flow.empty:
-                  raise RuntimeError("行业资金流返回空数据")
-
-              print("✅ 行业资金流获取成功")
-              print("行业数量：", len(industry_flow))
-              print("字段：")
-              print(list(industry_flow.columns))
-
-              industry_flow.to_csv(
-                  "industry_fund_flow.csv",
-                  index=False,
-                  encoding="utf-8-sig"
-              )
-
-          except Exception as e:
-
-              print(
-                  "❌ 行业资金流失败：",
-                  type(e).__name__,
-                  repr(e)
-              )
-
-              traceback.print_exc()
-              raise
-
-          # =====================================================
-          # 3. 获取概念资金流
-          # =====================================================
-          print("")
-          print("=" * 100)
-          print("【3】获取同花顺概念资金流")
-          print("=" * 100)
-
-          try:
-
-              concept_flow = ak.stock_fund_flow_concept(
-                  symbol="即时"
-              )
-
-              if concept_flow is None or concept_flow.empty:
-                  raise RuntimeError("概念资金流返回空数据")
-
-              print("✅ 概念资金流获取成功")
-              print("概念数量：", len(concept_flow))
-              print("字段：")
-              print(list(concept_flow.columns))
-
-              concept_flow.to_csv(
-                  "concept_fund_flow.csv",
-                  index=False,
-                  encoding="utf-8-sig"
-              )
-
-          except Exception as e:
-
-              print(
-                  "❌ 概念资金流失败：",
-                  type(e).__name__,
-                  repr(e)
-              )
-
-              traceback.print_exc()
-              raise
-
-          # =====================================================
-          # 4. 检查个股资金流
-          # =====================================================
-          print("")
-          print("=" * 100)
-          print("【4】四只测试股票资金流")
-          print("=" * 100)
-
-          print("")
-
-          results = []
-
-          for stock in stocks:
-
-              code = stock["code"]
-              name = stock["name"]
-
+              print("")
               print("-" * 100)
-              print(f"股票：{name}（{code}）")
+              print("目标代码：", code)
 
-              try:
+              # 方法 1：原始字符串
+              mask1 = (
+                  df["股票代码"].astype(str)
+                  == code
+              )
 
-                  row = stock_flow[
-                      stock_flow["股票代码"].astype(str).str.zfill(6)
-                      == code
-                  ]
+              print(
+                  "方法1 原始匹配：",
+                  int(mask1.sum()),
+                  "条"
+              )
 
-                  if row.empty:
-                      print("⚠️ 没有找到该股票")
-                      continue
-
-                  row = row.iloc[0]
-
-                  inflow = pd.to_numeric(
-                      row.get("流入资金"),
-                      errors="coerce"
-                  )
-
-                  outflow = pd.to_numeric(
-                      row.get("流出资金"),
-                      errors="coerce"
-                  )
-
-                  net = pd.to_numeric(
-                      row.get("净额"),
-                      errors="coerce"
-                  )
-
-                  turnover = pd.to_numeric(
-                      row.get("成交额"),
-                      errors="coerce"
-                  )
-
-                  ratio = None
-
-                  if (
-                      pd.notna(net)
-                      and pd.notna(turnover)
-                      and turnover != 0
-                  ):
-                      ratio = net / turnover * 100
-
-                  print("股票名称：", row.get("股票简称"))
-                  print("最新价：", row.get("最新价"))
-                  print("涨跌幅：", row.get("涨跌幅"))
-                  print("流入资金：", inflow)
-                  print("流出资金：", outflow)
-                  print("净额：", net)
-                  print("成交额：", turnover)
-
-                  if ratio is not None:
-                      print(
-                          "净额/成交额：",
-                          round(ratio, 2),
-                          "%"
-                      )
-
-                  results.append({
-                      "代码": code,
-                      "名称": name,
-                      "最新价": row.get("最新价"),
-                      "涨跌幅": row.get("涨跌幅"),
-                      "个股流入": inflow,
-                      "个股流出": outflow,
-                      "个股净额": net,
-                      "个股成交额": turnover,
-                      "个股资金强度": ratio,
-                  })
-
-              except Exception as e:
-
+              if mask1.any():
                   print(
-                      "❌ 股票资金解析失败：",
-                      type(e).__name__,
-                      repr(e)
+                      df.loc[mask1].to_string(
+                          index=False
+                      )
                   )
+                  continue
 
-              time.sleep(0.5)
+              # 方法 2：去空格
+              mask2 = (
+                  df["股票代码"]
+                  .astype(str)
+                  .str.strip()
+                  == code
+              )
+
+              print(
+                  "方法2 strip匹配：",
+                  int(mask2.sum()),
+                  "条"
+              )
+
+              if mask2.any():
+                  print(
+                      df.loc[mask2].to_string(
+                          index=False
+                      )
+                  )
+                  continue
+
+              # 方法 3：补零
+              mask3 = (
+                  df["股票代码"]
+                  .astype(str)
+                  .str.strip()
+                  .str.zfill(6)
+                  == code
+              )
+
+              print(
+                  "方法3 zfill匹配：",
+                  int(mask3.sum()),
+                  "条"
+              )
+
+              if mask3.any():
+                  print(
+                      df.loc[mask3].to_string(
+                          index=False
+                      )
+                  )
+                  continue
+
+              # 方法 4：包含代码
+              mask4 = (
+                  df["股票代码"]
+                  .astype(str)
+                  .str.contains(
+                      code,
+                      regex=False,
+                      na=False
+                  )
+              )
+
+              print(
+                  "方法4 contains匹配：",
+                  int(mask4.sum()),
+                  "条"
+              )
+
+              if mask4.any():
+                  print(
+                      df.loc[mask4].to_string(
+                          index=False
+                      )
+                  )
+                  continue
+
+              print("❌ 四种方式都没有匹配")
 
           # =====================================================
-          # 5. 对行业资金流进行排序
+          # 查看股票代码长度
           # =====================================================
+
           print("")
           print("=" * 100)
-          print("【5】行业资金流排名")
+          print("【4】股票代码长度统计")
           print("=" * 100)
 
-          try:
+          code_lengths = (
+              df["股票代码"]
+              .astype(str)
+              .str.len()
+              .value_counts()
+              .sort_index()
+          )
 
-              industry_flow["净额_num"] = pd.to_numeric(
-                  industry_flow["净额"],
-                  errors="coerce"
-              )
-
-              industry_top = industry_flow.sort_values(
-                  "净额_num",
-                  ascending=False
-              ).head(20)
-
-              print(
-                  industry_top[
-                      [
-                          "行业",
-                          "行业-涨跌幅",
-                          "流入资金",
-                          "流出资金",
-                          "净额",
-                          "公司家数"
-                      ]
-                  ].to_string(index=False)
-              )
-
-          except Exception as e:
-
-              print(
-                  "⚠️ 行业排序失败：",
-                  type(e).__name__,
-                  repr(e)
-              )
+          print(code_lengths)
 
           # =====================================================
-          # 6. 概念资金流排名
+          # 查看可能包含 600150 / 300308 等的记录
           # =====================================================
+
           print("")
           print("=" * 100)
-          print("【6】概念资金流排名")
+          print("【5】模糊搜索")
           print("=" * 100)
 
-          try:
+          for code in targets:
 
-              concept_flow["净额_num"] = pd.to_numeric(
-                  concept_flow["净额"],
-                  errors="coerce"
-              )
-
-              concept_top = concept_flow.sort_values(
-                  "净额_num",
-                  ascending=False
-              ).head(20)
-
-              print(
-                  concept_top[
-                      [
-                          "行业",
-                          "行业-涨跌幅",
-                          "流入资金",
-                          "流出资金",
-                          "净额",
-                          "公司家数",
-                          "领涨股"
-                      ]
-                  ].to_string(index=False)
-              )
-
-          except Exception as e:
-
-              print(
-                  "⚠️ 概念排序失败：",
-                  type(e).__name__,
-                  repr(e)
-              )
-
-          # =====================================================
-          # 7. 最终汇总
-          # =====================================================
-          print("")
-          print("=" * 100)
-          print("【7】资金流三合一测试汇总")
-          print("=" * 100)
-
-          if results:
-
-              result_df = pd.DataFrame(results)
-
-              result_df.to_csv(
-                  "combined_stock_fund_flow.csv",
-                  index=False,
-                  encoding="utf-8-sig"
-              )
+              result = df[
+                  df["股票代码"]
+                  .astype(str)
+                  .str.contains(
+                      code,
+                      regex=False,
+                      na=False
+                  )
+              ]
 
               print("")
               print(
-                  result_df.to_string(index=False)
+                  "搜索",
+                  code,
+                  "找到",
+                  len(result),
+                  "条"
               )
 
-          print("")
-          print("=" * 100)
-          print("测试完成")
-          print("=" * 100)
+              if not result.empty:
+                  print(
+                      result.to_string(
+                          index=False
+                      )
+                  )
 
           print("")
-          print("注意：")
-          print("本次测试只验证资金流数据能否获取。")
-          print("暂未强行把股票与行业/概念进行归属匹配。")
-          print("正式接入 AlphaSift 前还需要解决行业/概念归属映射。")
+          print("=" * 100)
+          print("诊断完成")
+          print("=" * 100)
 
           PY
-
-      # =========================================================
-      # 5. 上传全部测试结果
-      # =========================================================
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: combined-fund-flow-test
-          path: |
-            *.csv
-          if-no-files-found: ignore
