@@ -45,16 +45,274 @@ jobs:
           alphasift strategies
 
       # =========================================================
-      # 5. Daily screening
+      # 5. Generate industry map
       # =========================================================
-      - name: 5. Daily screening
+      - name: 5. Generate industry map
         run: |
+          mkdir -p data
+
+          python - <<'PY'
+          import baostock as bs
+          import pandas as pd
+
+          print("========================================")
+          print("开始获取 A 股行业分类")
+          print("========================================")
+
+          # -----------------------------------------------------
+          # Baostock 登录
+          # -----------------------------------------------------
+          lg = bs.login()
+
+          print(
+              "Baostock login:",
+              lg.error_code,
+              lg.error_msg
+          )
+
+          if lg.error_code != "0":
+              raise SystemExit(
+                  "Baostock 登录失败："
+                  + str(lg.error_msg)
+              )
+
+          try:
+
+              # -------------------------------------------------
+              # 获取股票行业分类
+              # -------------------------------------------------
+              rs = bs.query_stock_industry()
+
+              print(
+                  "query_stock_industry:",
+                  rs.error_code,
+                  rs.error_msg
+              )
+
+              if rs.error_code != "0":
+                  raise SystemExit(
+                      "获取行业数据失败："
+                      + str(rs.error_msg)
+                  )
+
+              rows = []
+
+              while rs.next():
+                  rows.append(
+                      rs.get_row_data()
+                  )
+
+              if not rows:
+                  raise SystemExit(
+                      "错误：Baostock 没有返回任何行业数据"
+                  )
+
+              # -------------------------------------------------
+              # 转换 DataFrame
+              # -------------------------------------------------
+              df = pd.DataFrame(
+                  rows,
+                  columns=rs.fields
+              )
+
+              print("")
+              print(
+                  "Baostock 原始行业数据：",
+                  len(df),
+                  "行"
+              )
+
+              print(
+                  "原始字段：",
+                  list(df.columns)
+              )
+
+              # -------------------------------------------------
+              # 检查必要字段
+              # -------------------------------------------------
+              if "code" not in df.columns:
+                  raise SystemExit(
+                      "错误：行业数据中不存在 code 字段"
+                  )
+
+              if "industry" not in df.columns:
+                  raise SystemExit(
+                      "错误：行业数据中不存在 industry 字段"
+                  )
+
+              # -------------------------------------------------
+              # 创建 AlphaSift 行业映射
+              #
+              # AlphaSift 支持：
+              # code
+              # industry
+              # concepts
+              # -------------------------------------------------
+              output = pd.DataFrame()
+
+              # 股票代码统一成 6 位代码
+              output["code"] = (
+                  df["code"]
+                  .astype(str)
+                  .str.replace(
+                      "sh.",
+                      "",
+                      regex=False
+                  )
+                  .str.replace(
+                      "sz.",
+                      "",
+                      regex=False
+                  )
+                  .str.replace(
+                      "bj.",
+                      "",
+                      regex=False
+                  )
+                  .str.strip()
+              )
+
+              # 行业
+              output["industry"] = (
+                  df["industry"]
+                  .fillna("")
+                  .astype(str)
+                  .str.strip()
+              )
+
+              # Baostock 本次只负责行业。
+              # concepts 留空，不影响 AlphaSift 使用行业风险桶。
+              output["concepts"] = ""
+
+              # -------------------------------------------------
+              # 只保留标准 6 位股票代码
+              # -------------------------------------------------
+              output = output[
+                  output["code"].str.match(
+                      r"^\d{6}$"
+                  )
+              ]
+
+              # -------------------------------------------------
+              # 删除重复股票
+              # -------------------------------------------------
+              output = output.drop_duplicates(
+                  subset=["code"],
+                  keep="first"
+              )
+
+              # -------------------------------------------------
+              # 删除完全没有行业的数据
+              # -------------------------------------------------
+              output = output[
+                  output["industry"].str.len() > 0
+              ]
+
+              if output.empty:
+                  raise SystemExit(
+                      "错误：生成的行业映射为空"
+                  )
+
+              # -------------------------------------------------
+              # 保存
+              # -------------------------------------------------
+              output.to_csv(
+                  "data/industry_map.csv",
+                  index=False,
+                  encoding="utf-8-sig"
+              )
+
+              print("")
+              print("========================================")
+              print("行业映射生成完成")
+              print("========================================")
+
+              print(
+                  "股票数量：",
+                  len(output)
+              )
+
+              print(
+                  "文件：",
+                  "data/industry_map.csv"
+              )
+
+              print("")
+              print("前 10 条数据：")
+              print(
+                  output.head(10).to_string(
+                      index=False
+                  )
+              )
+
+              # -------------------------------------------------
+              # 行业统计
+              # -------------------------------------------------
+              print("")
+              print("主要行业统计：")
+
+              industry_counts = (
+                  output["industry"]
+                  .value_counts()
+                  .head(20)
+              )
+
+              print(
+                  industry_counts.to_string()
+              )
+
+          finally:
+
+              bs.logout()
+
+              print("")
+              print(
+                  "Baostock 已退出"
+              )
+
+          PY
+
+          echo ""
+          echo "========================================"
+          echo "检查行业映射文件"
+          echo "========================================"
+
+          ls -lh data/industry_map.csv
+
+          echo ""
+          echo "行业映射文件前 20 行："
+
+          head -20 data/industry_map.csv
+
+      # =========================================================
+      # 6. Daily screening
+      # =========================================================
+      - name: 6. Daily screening
+        env:
+          INDUSTRY_MAP_FILES: ./data/industry_map.csv
+          INDUSTRY_PROVIDER: none
+        run: |
+          echo "========================================"
+          echo "AlphaSift 每日选股开始"
+          echo "========================================"
+
+          echo ""
+          echo "行业映射："
+          echo "$INDUSTRY_MAP_FILES"
+
+          echo ""
+          echo "行业 Provider："
+          echo "$INDUSTRY_PROVIDER"
+
+          echo ""
+          echo "开始执行 dual_low..."
+
           alphasift screen dual_low --no-llm --save-run
 
       # =========================================================
-      # 6. Find latest saved run
+      # 7. Find latest AlphaSift run
       # =========================================================
-      - name: 6. Find latest AlphaSift run
+      - name: 7. Find latest AlphaSift run
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -64,12 +322,18 @@ jobs:
           run_dir = Path("data/runs")
 
           if not run_dir.exists():
-              raise SystemExit("错误：data/runs 目录不存在")
+              raise SystemExit(
+                  "错误：data/runs 目录不存在"
+              )
 
-          files = list(run_dir.glob("*.json"))
+          files = list(
+              run_dir.glob("*.json")
+          )
 
           if not files:
-              raise SystemExit("错误：没有找到 AlphaSift run JSON")
+              raise SystemExit(
+                  "错误：没有找到 AlphaSift run JSON"
+              )
 
           latest = max(
               files,
@@ -87,17 +351,34 @@ jobs:
 
           print(
               "Run ID：",
-              data.get("run_id", "unknown")
+              data.get(
+                  "run_id",
+                  "unknown"
+              )
           )
 
           print(
               "Strategy：",
-              data.get("strategy", "unknown")
+              data.get(
+                  "strategy",
+                  "unknown"
+              )
           )
 
           print(
               "Snapshot source：",
-              data.get("snapshot_source", "unknown")
+              data.get(
+                  "snapshot_source",
+                  "unknown"
+              )
+          )
+
+          print(
+              "Industry map：",
+              data.get(
+                  "industry_map_file",
+                  "data/industry_map.csv"
+              )
           )
 
           with open(
@@ -105,6 +386,7 @@ jobs:
               "a",
               encoding="utf-8"
           ) as env:
+
               env.write(
                   f"ALPHASIFT_RUN_FILE={latest}\n"
               )
@@ -113,12 +395,13 @@ jobs:
               "ALPHASIFT_RUN_FILE =",
               latest
           )
+
           PY
 
       # =========================================================
-      # 7. Send Top 5 to Feishu
+      # 8. Send Top 5 to Feishu
       # =========================================================
-      - name: 7. Send Top 5 to Feishu
+      - name: 8. Send Top 5 to Feishu
         if: success()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -149,7 +432,10 @@ jobs:
                   "错误：没有找到 ALPHASIFT_RUN_FILE"
               )
 
-          print("读取 run：", run_file)
+          print(
+              "读取 run：",
+              run_file
+          )
 
           with open(
               run_file,
@@ -160,12 +446,18 @@ jobs:
 
           print(
               "Run ID：",
-              data.get("run_id", "unknown")
+              data.get(
+                  "run_id",
+                  "unknown"
+              )
           )
 
           print(
               "Strategy：",
-              data.get("strategy", "unknown")
+              data.get(
+                  "strategy",
+                  "unknown"
+              )
           )
 
           # =====================================================
@@ -185,12 +477,17 @@ jobs:
               "ranked"
           ]
 
+          # -----------------------------------------------------
           # 顶层寻找
+          # -----------------------------------------------------
           for field in possible_fields:
 
               value = data.get(field)
 
-              if isinstance(value, list) and value:
+              if (
+                  isinstance(value, list)
+                  and value
+              ):
 
                   candidates = value
 
@@ -201,7 +498,9 @@ jobs:
 
                   break
 
+          # -----------------------------------------------------
           # 嵌套寻找
+          # -----------------------------------------------------
           if candidates is None:
 
               for parent_name in [
@@ -213,16 +512,29 @@ jobs:
                   "data"
               ]:
 
-                  parent = data.get(parent_name)
+                  parent = data.get(
+                      parent_name
+                  )
 
-                  if not isinstance(parent, dict):
+                  if not isinstance(
+                      parent,
+                      dict
+                  ):
                       continue
 
                   for field in possible_fields:
 
-                      value = parent.get(field)
+                      value = parent.get(
+                          field
+                      )
 
-                      if isinstance(value, list) and value:
+                      if (
+                          isinstance(
+                              value,
+                              list
+                          )
+                          and value
+                      ):
 
                           candidates = value
 
@@ -238,7 +550,7 @@ jobs:
                       break
 
           # =====================================================
-          # 找不到股票时，把 JSON 结构打印出来
+          # 找不到股票时打印 JSON
           # =====================================================
           if candidates is None:
 
@@ -278,16 +590,25 @@ jobs:
           # =====================================================
           def get_rank(stock):
 
-              if not isinstance(stock, dict):
+              if not isinstance(
+                  stock,
+                  dict
+              ):
                   return 999999
 
-              value = stock.get("rank")
+              value = stock.get(
+                  "rank"
+              )
 
               if value is None:
-                  value = stock.get("ranking")
+                  value = stock.get(
+                      "ranking"
+                  )
 
               if value is None:
-                  value = stock.get("position")
+                  value = stock.get(
+                      "position"
+                  )
 
               try:
                   return int(value)
@@ -309,7 +630,10 @@ jobs:
           # =====================================================
           # 格式化数字
           # =====================================================
-          def number(value, digits=2):
+          def number(
+              value,
+              digits=2
+          ):
 
               if value is None:
                   return "-"
@@ -370,11 +694,16 @@ jobs:
           )
 
           if llm_ranked:
-              lines.append("LLM：已启用")
+              lines.append(
+                  "LLM：已启用"
+              )
           else:
-              lines.append("LLM：未启用")
+              lines.append(
+                  "LLM：未启用"
+              )
 
           if post_analyzers:
+
               lines.append(
                   "后置分析："
                   + ", ".join(
@@ -404,7 +733,10 @@ jobs:
               start=1
           ):
 
-              if not isinstance(stock, dict):
+              if not isinstance(
+                  stock,
+                  dict
+              ):
                   continue
 
               code = (
@@ -425,6 +757,7 @@ jobs:
               )
 
               if final_score is None:
+
                   final_score = stock.get(
                       "score"
                   )
@@ -438,6 +771,7 @@ jobs:
               )
 
               if price is None:
+
                   price = stock.get(
                       "close"
                   )
@@ -447,6 +781,7 @@ jobs:
               )
 
               if change_pct is None:
+
                   change_pct = stock.get(
                       "change"
                   )
@@ -456,6 +791,7 @@ jobs:
               )
 
               if pe is None:
+
                   pe = stock.get(
                       "pe"
                   )
@@ -465,13 +801,18 @@ jobs:
               )
 
               if pb is None:
+
                   pb = stock.get(
                       "pb"
                   )
 
               risk = (
-                  stock.get("risk_level")
-                  or stock.get("risk")
+                  stock.get(
+                      "risk_level"
+                  )
+                  or stock.get(
+                      "risk"
+                  )
                   or "-"
               )
 
@@ -493,6 +834,7 @@ jobs:
               )
 
               if screen_score is not None:
+
                   lines.append(
                       "   筛选评分："
                       + number(
@@ -554,7 +896,9 @@ jobs:
               "不构成投资建议。"
           )
 
-          message = "\n".join(lines)
+          message = "\n".join(
+              lines
+          )
 
           # =====================================================
           # 打印最终飞书内容
@@ -622,4 +966,5 @@ jobs:
           print(
               "✅ Top 5 已成功发送到飞书"
           )
+
           PY
