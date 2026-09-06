@@ -1,11 +1,11 @@
-name: AlphaSift 第四步板块资金流测试
+name: AlphaSift 第五步同花顺板块资金流测试
 
 on:
   workflow_dispatch:
 
 jobs:
 
-  test-sector-fund-flow:
+  test-ths-sector-fund-flow:
 
     runs-on: ubuntu-latest
 
@@ -31,468 +31,270 @@ jobs:
       - name: Install AKShare
         run: |
           python -m pip install --upgrade pip
-          pip install akshare pandas
+          pip install --upgrade akshare pandas
 
       # =========================================================
-      # 4. 测试板块资金流
-      #
-      # 数据链路：
-      #
-      # GitHub Actions
-      #       ↓
-      # AKShare
-      #       ↓
-      # 东方财富板块资金流
-      #       ↓
-      # 行业 / 概念板块
-      #
-      # 注意：
-      # 这一阶段只测试，不加入正式选股。
+      # 4. 检查当前 AKShare 是否包含同花顺板块资金流接口
       # =========================================================
-      - name: 测试板块资金流
+      - name: 检查同花顺板块资金流接口
+        run: |
+          python - <<'PY'
+          import akshare as ak
+
+          print("=" * 80)
+          print("检查 AKShare 同花顺板块资金流接口")
+          print("=" * 80)
+
+          candidates = [
+              name
+              for name in dir(ak)
+              if "fund_flow" in name.lower()
+              and (
+                  "board" in name.lower()
+                  or "sector" in name.lower()
+              )
+          ]
+
+          if candidates:
+
+              print("")
+              print("发现以下相关接口：")
+
+              for name in sorted(candidates):
+                  print("  -", name)
+
+          else:
+
+              print("")
+              print("⚠️ 没有发现 board/sector + fund_flow 接口")
+
+          print("")
+          print("AKShare 版本：", getattr(ak, "__version__", "unknown"))
+
+          print("=" * 80)
+          PY
+
+      # =========================================================
+      # 5. 测试同花顺行业板块资金流
+      # =========================================================
+      - name: 测试同花顺行业板块资金流
         run: |
           python - <<'PY'
           import akshare as ak
           import pandas as pd
           import traceback
+          import inspect
 
           print("=" * 80)
-          print("AlphaSift 第四步：测试板块资金流")
+          print("AlphaSift 第五步：同花顺行业板块资金流")
           print("=" * 80)
 
           # -----------------------------------------------------
-          # 资金字符串转换
+          # 寻找可能的同花顺行业板块资金流接口
           # -----------------------------------------------------
 
-          def parse_money(value):
+          candidates = [
+              "stock_board_industry_fund_flow_ths",
+              "stock_sector_fund_flow_ths",
+          ]
 
-              if pd.isna(value):
-                  return None
+          function_name = None
 
-              text = str(value).strip()
+          for name in candidates:
 
-              if text in ("", "-", "--", "nan", "None"):
-                  return None
+              if hasattr(ak, name):
 
-              negative = text.startswith("-")
+                  function_name = name
+                  break
 
-              text = text.replace(",", "")
-              text = text.replace("+", "")
-              text = text.replace("-", "")
+          if function_name is None:
 
-              try:
+              print("")
+              print("❌ 当前 AKShare 没有找到预期的同花顺行业资金流接口")
 
-                  if "亿" in text:
-                      number = float(
-                          text.replace("亿", "")
-                      ) * 100000000
+              print("")
+              print("当前相关接口：")
 
-                  elif "万" in text:
-                      number = float(
-                          text.replace("万", "")
-                      ) * 10000
+              for name in sorted(
+                  [
+                      x for x in dir(ak)
+                      if "fund_flow" in x.lower()
+                      and (
+                          "board" in x.lower()
+                          or "sector" in x.lower()
+                      )
+                  ]
+              ):
+                  print("  -", name)
 
-                  elif "千" in text:
-                      number = float(
-                          text.replace("千", "")
-                      ) * 1000
+              raise RuntimeError(
+                  "没有找到同花顺行业板块资金流接口"
+              )
 
-                  else:
-                      number = float(text)
+          print("")
+          print("找到接口：", function_name)
 
-                  return -number if negative else number
-
-              except Exception:
-                  return None
+          func = getattr(ak, function_name)
 
           try:
 
-              # =================================================
-              # 1. 测试行业板块资金流
-              # =================================================
+              print("")
+              print("函数签名：")
+              print(inspect.signature(func))
 
-              print("")
-              print("=" * 80)
-              print("【1】测试行业板块资金流")
-              print("=" * 80)
+          except Exception:
 
-              print("")
-              print("调用接口：")
-              print("ak.stock_sector_fund_flow_rank(indicator='今日')")
-              print("")
+              pass
+
+          # -----------------------------------------------------
+          # 获取同花顺行业板块列表
+          #
+          # 不同 AKShare 版本参数可能略有区别。
+          # 先尝试常见调用方式。
+          # -----------------------------------------------------
+
+          df = None
+          errors = []
+
+          attempts = [
+              {},
+              {"symbol": "半导体"},
+              {"symbol": "银行"},
+              {"symbol": "证券"},
+          ]
+
+          for kwargs in attempts:
 
               try:
 
-                  industry_df = ak.stock_sector_fund_flow_rank(
-                      indicator="今日"
+                  print("")
+                  print("尝试调用：")
+                  print(
+                      function_name,
+                      kwargs
                   )
 
+                  result = func(**kwargs)
+
                   if (
-                      industry_df is None
-                      or industry_df.empty
+                      result is not None
+                      and not result.empty
                   ):
 
-                      print("❌ 行业板块接口返回空数据")
+                      df = result
+
+                      print("")
+                      print("✅ 调用成功")
+                      print("参数：", kwargs)
+
+                      break
 
                   else:
 
-                      print("✅ 行业板块接口调用成功")
-                      print(
-                          "行业板块数量：",
-                          len(industry_df)
-                      )
-
-                      print("")
-                      print("字段：")
-                      print(
-                          list(industry_df.columns)
-                      )
-
-                      print("")
-                      print("=" * 80)
-                      print("行业板块前 10 行")
-                      print("=" * 80)
-
-                      print(
-                          industry_df.head(10)
-                          .to_string(index=False)
+                      errors.append(
+                          f"{kwargs} -> 空数据"
                       )
 
               except Exception as e:
 
-                  print("")
-                  print("❌ 行业板块接口调用失败")
-                  print("异常类型：", type(e).__name__)
-                  print("异常信息：", repr(e))
+                  errors.append(
+                      f"{kwargs} -> "
+                      f"{type(e).__name__}: {e}"
+                  )
 
-                  industry_df = None
-
-              # =================================================
-              # 2. 测试概念板块资金流
-              # =================================================
+          if df is None:
 
               print("")
               print("=" * 80)
-              print("【2】测试概念板块资金流")
+              print("❌ 同花顺行业板块资金流测试失败")
               print("=" * 80)
 
               print("")
-              print("调用接口：")
-              print("ak.stock_sector_fund_flow_rank(indicator='今日')")
-              print("")
 
-              # 说明：
-              # 某些 AKShare 版本的该接口默认返回行业/板块排名。
-              # 如果没有单独概念参数，则先确认默认板块数据是否正常。
+              for error in errors:
+                  print(error)
 
-              if (
-                  industry_df is not None
-                  and not industry_df.empty
-              ):
-
-                  print(
-                      "当前 AKShare 版本已经成功返回板块资金流数据。"
-                  )
-
-              # =================================================
-              # 3. 自动识别核心字段
-              # =================================================
-
-              print("")
-              print("=" * 80)
-              print("【3】自动识别板块资金字段")
-              print("=" * 80)
-
-              if (
-                  industry_df is not None
-                  and not industry_df.empty
-              ):
-
-                  sector_df = industry_df
-
-                  sector_name_col = None
-                  net_col = None
-                  inflow_col = None
-                  outflow_col = None
-
-                  for col in sector_df.columns:
-
-                      text = str(col)
-
-                      if (
-                          "板块" in text
-                          or "行业" in text
-                          or "名称" in text
-                      ):
-
-                          if sector_name_col is None:
-                              sector_name_col = col
-
-                      if "净额" in text:
-                          net_col = col
-
-                      if "流入" in text:
-                          inflow_col = col
-
-                      if "流出" in text:
-                          outflow_col = col
-
-                  print(
-                      "板块名称字段：",
-                      sector_name_col
-                  )
-
-                  print(
-                      "净额字段：",
-                      net_col
-                  )
-
-                  print(
-                      "流入字段：",
-                      inflow_col
-                  )
-
-                  print(
-                      "流出字段：",
-                      outflow_col
-                  )
-
-                  # =============================================
-                  # 4. 转换净额
-                  # =============================================
-
-                  if net_col is not None:
-
-                      sector_df["_net_value"] = (
-                          sector_df[net_col]
-                          .apply(parse_money)
-                      )
-
-                      valid = sector_df.dropna(
-                          subset=["_net_value"]
-                      )
-
-                      print("")
-                      print(
-                          "有效板块资金数据：",
-                          len(valid)
-                      )
-
-                  else:
-
-                      valid = pd.DataFrame()
-
-                      print(
-                          "⚠️ 没有自动找到净额字段"
-                      )
-
-              else:
-
-                  valid = pd.DataFrame()
-
-              # =================================================
-              # 5. 净流入板块 Top 20
-              # =================================================
-
-              print("")
-              print("=" * 80)
-              print("【4】板块资金净流入 Top 20")
-              print("=" * 80)
-
-              if not valid.empty:
-
-                  top_inflow = (
-                      valid
-                      .sort_values(
-                          "_net_value",
-                          ascending=False
-                      )
-                      .head(20)
-                  )
-
-                  show_cols = [
-                      col
-                      for col in [
-                          sector_name_col,
-                          "涨跌幅",
-                          inflow_col,
-                          outflow_col,
-                          net_col
-                      ]
-                      if col is not None
-                      and col in top_inflow.columns
-                  ]
-
-                  print(
-                      top_inflow[
-                          show_cols
-                      ].to_string(index=False)
-                  )
-
-              else:
-
-                  print(
-                      "⚠️ 没有可用于排序的板块资金数据"
-                  )
-
-              # =================================================
-              # 6. 净流出板块 Top 20
-              # =================================================
-
-              print("")
-              print("=" * 80)
-              print("【5】板块资金净流出 Top 20")
-              print("=" * 80)
-
-              if not valid.empty:
-
-                  top_outflow = (
-                      valid
-                      .sort_values(
-                          "_net_value",
-                          ascending=True
-                      )
-                      .head(20)
-                  )
-
-                  print(
-                      top_outflow[
-                          show_cols
-                      ].to_string(index=False)
-                  )
-
-              else:
-
-                  print(
-                      "⚠️ 没有可用于排序的板块资金数据"
-                  )
-
-              # =================================================
-              # 7. 测试几个重点板块
-              # =================================================
-
-              print("")
-              print("=" * 80)
-              print("【6】重点板块检查")
-              print("=" * 80)
-
-              if (
-                  not valid.empty
-                  and sector_name_col is not None
-              ):
-
-                  keywords = [
-                      "银行",
-                      "证券",
-                      "半导体",
-                      "通信",
-                      "人工智能",
-                      "机器人",
-                      "电池",
-                      "新能源",
-                      "军工",
-                      "汽车"
-                  ]
-
-                  for keyword in keywords:
-
-                      matches = valid[
-                          valid[
-                              sector_name_col
-                          ]
-                          .astype(str)
-                          .str.contains(
-                              keyword,
-                              case=False,
-                              na=False
-                          )
-                      ]
-
-                      if not matches.empty:
-
-                          print("")
-                          print(
-                              f"关键词【{keyword}】:"
-                          )
-
-                          print(
-                              matches[
-                                  show_cols
-                              ].head(5)
-                              .to_string(
-                                  index=False
-                              )
-                          )
-
-              # =================================================
-              # 8. 最终结论
-              # =================================================
-
-              print("")
-              print("=" * 80)
-              print("【7】第四步测试结论")
-              print("=" * 80)
-
-              if not valid.empty:
-
-                  print("")
-                  print(
-                      "✅ GitHub Actions 可以访问板块资金流"
-                  )
-
-                  print(
-                      "✅ 成功获得板块数据"
-                  )
-
-                  print(
-                      "✅ 成功获得资金净额字段"
-                  )
-
-                  print(
-                      "✅ 可以进行板块资金净流入排序"
-                  )
-
-                  print("")
-                  print(
-                      "下一步可以继续研究："
-                  )
-
-                  print(
-                      "板块资金流 → 股票所属行业 → 个股资金流"
-                  )
-
-              else:
-
-                  print("")
-                  print(
-                      "⚠️ 板块资金流数据没有成功获得"
-                  )
-
-                  print(
-                      "暂时不能加入正式选股系统"
-                  )
-
-              print("")
-              print("=" * 80)
-
-          except Exception as e:
-
-              print("")
-              print("=" * 80)
-              print("❌ 第四步测试发生异常")
-              print("=" * 80)
-
-              print(
-                  "异常类型：",
-                  type(e).__name__
+              raise RuntimeError(
+                  "同花顺行业板块资金流无法获取数据"
               )
 
-              print(
-                  "异常信息：",
-                  repr(e)
-              )
+          # -----------------------------------------------------
+          # 输出数据
+          # -----------------------------------------------------
 
-              traceback.print_exc()
+          print("")
+          print("=" * 80)
+          print("【1】行业板块资金流接口成功")
+          print("=" * 80)
 
-              raise
+          print("")
+          print("数据行数：", len(df))
+
+          print("")
+          print("字段：")
+          print(list(df.columns))
+
+          print("")
+          print("前 10 行：")
+          print(df.head(10).to_string(index=False))
+
+          # -----------------------------------------------------
+          # 自动寻找资金流字段
+          # -----------------------------------------------------
+
+          print("")
+          print("=" * 80)
+          print("【2】自动识别资金流字段")
+          print("=" * 80)
+
+          for col in df.columns:
+
+              text = str(col)
+
+              if any(
+                  keyword in text
+                  for keyword in [
+                      "流入",
+                      "流出",
+                      "净额",
+                      "净流入",
+                      "成交额"
+                  ]
+              ):
+
+                  print("资金字段：", col)
+
+          print("")
+          print("=" * 80)
+          print("【3】行业板块资金流测试完成")
+          print("=" * 80)
+
+          print("")
+          print("下一步将根据实际返回字段判断：")
+          print("1. 是否有净流入")
+          print("2. 是否可以排序")
+          print("3. 是否可以关联股票所属行业")
+          print("4. 是否适合接入 AlphaSift")
+
+          print("")
+          print("=" * 80)
+
+          # 保存临时结果，方便 Actions 下载检查
+          df.to_csv(
+              "ths_industry_fund_flow_test.csv",
+              index=False,
+              encoding="utf-8-sig"
+          )
+
           PY
+
+      # =========================================================
+      # 6. 上传测试结果
+      # =========================================================
+      - name: 保存行业资金流测试结果
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ths-industry-fund-flow-test
+          path: ths_industry_fund_flow_test.csv
+          if-no-files-found: ignore
